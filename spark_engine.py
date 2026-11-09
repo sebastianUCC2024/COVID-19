@@ -165,14 +165,15 @@ def _preview(frame: DataFrame, columns: tuple[str, ...]) -> list[dict[str, Any]]
 
 
 def extraer_dataset() -> dict[str, Any]:
-    """Download the OWID CSV, read it with Spark, and return source statistics."""
+    """Download the RS-DELVE CSV, read it with Spark, and return source statistics."""
     global _raw_df, _processed_df, _download_directory, _source_stats, _etl_metrics
     with _lock:
         spark = get_spark_session()
         temporary_directory: Path | None = None
+        frame: DataFrame | None = None
         try:
             temporary_directory = Path(tempfile.mkdtemp(prefix="epidemiologia-"))
-            csv_path = temporary_directory / "owid-covid-data.csv"
+            csv_path = temporary_directory / "rs-delve-covid19.csv"
             with requests.get(DATASET_URL, stream=True, timeout=(15, 180)) as response:
                 response.raise_for_status()
                 with csv_path.open("wb") as csv_file:
@@ -182,10 +183,11 @@ def extraer_dataset() -> dict[str, Any]:
 
             frame = (
                 spark.read.option("header", True)
-                .option("inferSchema", True)
+                .option("inferSchema", False)
                 .option("mode", "FAILFAST")
                 .csv(str(csv_path))
             )
+            frame.persist(StorageLevel.MEMORY_AND_DISK)
             row_count = frame.count()
             preview_columns = (
                 "ISO",
@@ -198,13 +200,17 @@ def extraer_dataset() -> dict[str, Any]:
             )
             preview = _preview(frame, preview_columns)
         except Exception as exc:
+            if frame is not None:
+                frame.unpersist()
             if temporary_directory is not None:
                 shutil.rmtree(temporary_directory, ignore_errors=True)
-            logger.exception("No se pudo extraer el dataset de OWID")
+            logger.exception("No se pudo extraer el dataset de RS-DELVE")
             raise SparkEngineError(
-                "No fue posible descargar o leer el CSV de OWID. Intenta nuevamente."
+                "No fue posible descargar o leer el CSV de RS-DELVE. Intenta nuevamente."
             ) from exc
 
+        if _raw_df is not None:
+            _raw_df.unpersist()
         if _processed_df is not None:
             _processed_df.unpersist()
         if _download_directory is not None:
@@ -241,7 +247,7 @@ def _add_missing_columns(frame: DataFrame) -> DataFrame:
 
 
 def transformar_datos_pyspark() -> dict[str, Any]:
-    """Normalize OWID data, derive epidemiological KPIs, and report cleaning counts."""
+    """Normalize RS-DELVE data, derive epidemiological KPIs, and report cleaning counts."""
     global _processed_df, _etl_metrics
     with _lock:
         if _raw_df is None:
@@ -384,6 +390,8 @@ def close_spark_session() -> None:
     """Release cached DataFrames, downloaded data, and the Spark session."""
     global _spark, _raw_df, _processed_df, _download_directory, _source_stats, _etl_metrics
     with _lock:
+        if _raw_df is not None:
+            _raw_df.unpersist()
         if _processed_df is not None:
             _processed_df.unpersist()
         if _spark is not None:

@@ -22,7 +22,7 @@
         </span>
         <span>RESPIRA<span class="brand-dot">.</span></span>
       </a>
-      <div class="topbar-meta"><span class="live-dot"></span> PIPELINE EPIDEMIOLÓGICO <span class="meta-divider">/</span> OWID · PySpark</div>
+      <div class="topbar-meta"><span class="live-dot"></span> PIPELINE EPIDEMIOLÓGICO <span class="meta-divider">/</span> RS-DELVE · PySpark</div>
       <div class="source-links">
         <a class="source-link" href="https://github.com/rs-delve/covid19_datasets" target="_blank" rel="noreferrer">Repositorio RS-DELVE <span aria-hidden="true">↗</span></a>
         <a class="source-link" href="https://raw.githubusercontent.com/rs-delve/covid19_datasets/master/dataset/combined_dataset_latest.csv" target="_blank" rel="noreferrer">CSV consolidado <span aria-hidden="true">↗</span></a>
@@ -51,7 +51,7 @@
         <div class="steps" aria-label="Fases del procesamiento">
           <div class="step-item active" data-step="extract">
             <span class="step-marker">01</span><span class="step-connector"></span>
-            <div class="step-label"><strong>Extracción</strong><small>CSV · Our World in Data</small></div>
+            <div class="step-label"><strong>Extracción</strong><small>CSV · RS-DELVE</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
           <div class="step-item" data-step="transform">
@@ -266,7 +266,7 @@
         const config = {
           extract: {
             url: "/api/extract",
-            title: "Descargando dataset de OWID",
+            title: "Descargando dataset de RS-DELVE",
             detail: "Descarga y lectura del CSV con Apache Spark.",
             heading: "Datos crudos, listos para explorar.",
             description: "El archivo original ya está disponible. Ahora puedes revisar su escala antes de transformarlo.",

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e18">
+  <meta name="description" content="Dashboard de seguimiento epidemiológico y pipeline ETL con PySpark.">
+  <title>Respira | Seguimiento epidemiológico</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Respira, inicio">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M4 17h6l3-9 5 17 4-12 2 4h4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>RESPIRA<span class="brand-dot">.</span></span>
+      </a>
+      <div class="topbar-meta"><span class="live-dot"></span> PIPELINE EPIDEMIOLÓGICO <span class="meta-divider">/</span> OWID · PySpark</div>
+      <div class="source-links">
+        <a class="source-link" href="https://github.com/rs-delve/covid19_datasets" target="_blank" rel="noreferrer">Repositorio RS-DELVE <span aria-hidden="true">↗</span></a>
+        <a class="source-link" href="https://raw.githubusercontent.com/rs-delve/covid19_datasets/master/dataset/combined_dataset_latest.csv" target="_blank" rel="noreferrer">CSV consolidado <span aria-hidden="true">↗</span></a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span> PROYECTO 06 · INTELIGENCIA DE DATOS</p>
+        <h1>Los datos que<br>ayudan a <span>respirar.</span></h1>
+        <p class="hero-description">De millones de registros epidemiológicos a señales claras para entender la evolución de las enfermedades respiratorias.</p>
+      </div>
+      <div class="hero-stats" aria-label="Características del pipeline">
+        <div class="hero-stat"><span class="stat-icon cyan">↘</span><strong>RS-DELVE</strong><small>DATASET GLOBAL</small></div>
+        <div class="hero-stat"><span class="stat-icon violet">✳</span><strong>PySpark</strong><small>MOTOR ETL</small></div>
+        <div class="hero-stat"><span class="stat-icon green">◈</span><strong>MySQL</strong><small>PERSISTENCIA</small></div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="pipeline-panel glass-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">PIPELINE</p><h2>Flujo de trabajo</h2></div>
+          <span class="step-count">03 <span>/ 03</span></span>
+        </div>
+        <div class="steps" aria-label="Fases del procesamiento">
+          <div class="step-item active" data-step="extract">
+            <span class="step-marker">01</span><span class="step-connector"></span>
+            <div class="step-label"><strong>Extracción</strong><small>CSV · Our World in Data</small></div>
+            <span class="step-state" aria-hidden="true">●</span>
+          </div>
+          <div class="step-item" data-step="transform">
+            <span class="step-marker">02</span><span class="step-connector"></span>
+            <div class="step-label"><strong>Transformación</strong><small>Limpieza · KPIs · Spark</small></div>
+            <span class="step-state" aria-hidden="true">●</span>
+          </div>
+          <div class="step-item" data-step="load">
+            <span class="step-marker">03</span>
+            <div class="step-label"><strong>Persistencia</strong><small>MySQL · JDBC seguro</small></div>
+            <span class="step-state" aria-hidden="true">●</span>
+          </div>
+        </div>
+
+        <div class="destination">
+          <div class="destination-title"><span>DESTINO DE DATOS</span><span class="info-tip" tabindex="0" aria-label="Elige la base de datos en la que se guardará el resultado del ETL" data-tooltip="Elige dónde se escribirá la tabla final del ETL.">i</span></div>
+          <div class="target-switch" role="group" aria-label="Destino de la base de datos">
+            <button type="button" class="target-option selected" data-target="local" aria-pressed="true"><span class="target-icon">⌂</span> Local</button>
+            <button type="button" class="target-option" data-target="cloud" aria-pressed="false"><span class="target-icon">☁</span> Nube Aiven</button>
+          </div>
+          <p class="target-note" id="target-note">MySQL en localhost · SSL desactivado</p>
+        </div>
+        <div class="pipeline-foot"><span class="secure-icon">⌑</span> Credenciales protegidas por variables de entorno</div>
+      </aside>
+
+      <section class="results-panel glass-panel" aria-live="polite">
+        <div class="results-heading">
+          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h2 id="view-title">Tu flujo, en tres pasos.</h2></div>
+          <span class="status-pill" id="status-pill"><span class="status-dot"></span><span id="status-text">LISTO PARA INICIAR</span></span>
+        </div>
+        <p class="results-intro" id="view-description">Ejecuta cada fase para descubrir cómo los datos abiertos se convierten en información lista para analizar.</p>
+
+        <div class="action-grid">
+          <button type="button" class="action-card primary-action" id="extract-button">
+            <span class="action-number">01 / EXTRACCIÓN</span>
+            <span class="action-title">Descargar data cruda <span aria-hidden="true">↗</span></span>
+            <span class="action-detail">Traer el CSV y explorar su estructura</span>
+          </button>
+          <button type="button" class="action-card" id="transform-button" disabled>
+            <span class="action-number">02 / TRANSFORMACIÓN</span>
+            <span class="action-title">Ejecutar ETL <span aria-hidden="true">↗</span></span>
+            <span class="action-detail">Limpiar, normalizar y calcular KPIs</span>
+          </button>
+          <button type="button" class="action-card" id="load-button" disabled>
+            <span class="action-number">03 / PERSISTENCIA</span>
+            <span class="action-title">Cargar a MySQL <span aria-hidden="true">↗</span></span>
+            <span class="action-detail">Guardar el resultado en el destino elegido</span>
+          </button>
+        </div>
+
+        <div class="loading-state" id="loading-state" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <div><strong id="loading-title">Procesando datos</strong><small id="loading-detail">Esto puede tomar unos minutos en la primera ejecución.</small></div>
+        </div>
+
+        <div class="output" id="output" hidden>
+          <div class="metrics-grid" id="metrics-grid"></div>
+          <div class="table-wrap">
+            <div class="table-heading"><div><p class="eyebrow">VISTA PREVIA</p><h3 id="preview-title">Muestra de registros</h3></div><span class="table-badge" id="preview-badge"></span></div>
+            <div class="table-scroll"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+          </div>
+        </div>
+        <div class="empty-state" id="empty-state">
+          <span class="empty-orbit" aria-hidden="true"><span>⌁</span></span>
+          <p>Un pipeline listo para ponerse en marcha</p>
+          <small>Comienza descargando los datos abiertos de COVID-19.</small>
+        </div>
+      </section>
+    </section>
+
+    <footer class="footer"><span>PROYECTO 06 <span class="footer-dot">•</span> SEGUIMIENTO EPIDEMIOLÓGICO</span><span>Datos abiertos para mejores decisiones <span class="footer-heart">✳</span></span></footer>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    (() => {
+      const buttons = {
+        extract: document.getElementById("extract-button"),
+        transform: document.getElementById("transform-button"),
+        load: document.getElementById("load-button")
+      };
+      const targetNote = document.getElementById("target-note");
+      const statusText = document.getElementById("status-text");
+      const statusPill = document.getElementById("status-pill");
+      const loadingState = document.getElementById("loading-state");
+      const output = document.getElementById("output");
+      const emptyState = document.getElementById("empty-state");
+      let selectedTarget = "local";
+      let busy = false;
+
+      const labels = {
+        rows: "REGISTROS",
+        columns: "COLUMNAS",
+        removed_null_keys: "CLAVES NULAS",
+        removed_aggregates: "AGREGADOS",
+        removed_duplicates: "DUPLICADOS",
+        imputed_daily_values: "NULOS IMPUTADOS"
+      };
+      const numberFormat = new Intl.NumberFormat("es-ES");
+
+      document.querySelectorAll(".target-option").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (busy) return;
+          selectedTarget = button.dataset.target;
+          document.querySelectorAll(".target-option").forEach((option) => {
+            const selected = option === button;
+            option.classList.toggle("selected", selected);
+            option.setAttribute("aria-pressed", String(selected));
+          });
+          targetNote.textContent = selectedTarget === "local"
+            ? "MySQL en localhost · SSL desactivado"
+            : "Aiven Cloud · conexión SSL requerida";
+        });
+      });
+
+      function showToast(message, isError = false) {
+        const toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.classList.toggle("error", isError);
+        toast.classList.add("visible");
+        window.setTimeout(() => toast.classList.remove("visible"), 4200);
+      }
+
+      function setBusy(isBusy, title = "", detail = "") {
+        busy = isBusy;
+        Object.values(buttons).forEach((button) => { button.disabled = isBusy || button.dataset.locked === "true"; });
+        loadingState.hidden = !isBusy;
+        if (isBusy) {
+          statusPill.classList.remove("failed");
+          document.getElementById("loading-title").textContent = title;
+          document.getElementById("loading-detail").textContent = detail;
+          statusPill.classList.add("working");
+          statusText.textContent = "PROCESANDO";
+        } else {
+          statusPill.classList.remove("working");
+        }
+      }
+
+      function renderMetrics(data, keys) {
+        const grid = document.getElementById("metrics-grid");
+        grid.replaceChildren();
+        keys.forEach((key, index) => {
+          if (data[key] === undefined) return;
+          const card = document.createElement("article");
+          card.className = "metric-card";
+          const value = document.createElement("strong");
+          value.textContent = numberFormat.format(data[key]);
+          const label = document.createElement("span");
+          label.textContent = labels[key] || key;
+          card.style.setProperty("--metric-delay", `${index * 55}ms`);
+          card.append(value, label);
+          grid.append(card);
+        });
+      }
+
+      function renderTable(data, title, badge = "") {
+        const head = document.getElementById("table-head");
+        const body = document.getElementById("table-body");
+        head.replaceChildren();
+        body.replaceChildren();
+        const columns = data.preview_columns || [];
+        const headerRow = document.createElement("tr");
+        columns.forEach((column) => {
+          const th = document.createElement("th");
+          th.textContent = column.replaceAll("_", " ");
+          headerRow.append(th);
+        });
+        head.append(headerRow);
+        (data.preview || []).forEach((record) => {
+          const row = document.createElement("tr");
+          columns.forEach((column) => {
+            const cell = document.createElement("td");
+            const value = record[column];
+            cell.textContent = value === null || value === undefined
+              ? "—"
+              : typeof value === "number" ? numberFormat.format(value) : String(value);
+            row.append(cell);
+          });
+          body.append(row);
+        });
+        document.getElementById("preview-title").textContent = title;
+        document.getElementById("preview-badge").textContent = badge;
+      }
+
+      function updatePipeline(step) {
+        const order = ["extract", "transform", "load"];
+        const activeIndex = order.indexOf(step);
+        document.querySelectorAll(".step-item").forEach((item, index) => {
+          item.classList.toggle("complete", index < activeIndex || step === "load");
+          item.classList.toggle("active", index === activeIndex && step !== "load");
+        });
+      }
+
+      async function request(url, payload) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload ? JSON.stringify(payload) : "{}"
+        });
+        let result;
+        try {
+          result = await response.json();
+        } catch {
+          throw new Error("El servidor devolvió una respuesta no válida.");
+        }
+        if (!response.ok || result.status !== "success") {
+          throw new Error(result.message || "No se pudo completar la operación.");
+        }
+        return result.data;
+      }
+
+      async function runStep(step) {
+        const config = {
+          extract: {
+            url: "/api/extract",
+            title: "Descargando dataset de OWID",
+            detail: "Descarga y lectura del CSV con Apache Spark.",
+            heading: "Datos crudos, listos para explorar.",
+            description: "El archivo original ya está disponible. Ahora puedes revisar su escala antes de transformarlo.",
+            metricKeys: ["rows", "columns"],
+            previewTitle: "Muestra del dataset original",
+            badge: "RS-DELVE · CSV"
+          },
+          transform: {
+            url: "/api/transform",
+            title: "Ejecutando ETL con PySpark",
+            detail: "Normalizando ubicaciones, fechas y métricas epidemiológicas.",
+            heading: "Datos limpios. Señales más claras.",
+            description: "Los agregados se excluyeron, las claves se validaron y se calcularon KPIs epidemiológicos.",
+            metricKeys: ["rows", "columns", "removed_null_keys", "removed_aggregates", "removed_duplicates", "imputed_daily_values"],
+            previewTitle: "Muestra del dataset transformado",
+            badge: "NORMALIZADO · SPARK"
+          },
+          load: {
+            url: "/api/load",
+            title: "Guardando en MySQL",
+            detail: `Persistiendo el dataset en ${selectedTarget === "local" ? "MySQL local" : "Aiven Cloud"}.`,
+            heading: "Persistencia completada.",
+            description: "Los datos transformados están disponibles en la tabla de seguimiento epidemiológico.",
+            metricKeys: ["rows"],
+            previewTitle: "Destino de persistencia",
+            badge: selectedTarget === "local" ? "MYSQL · LOCAL" : "MYSQL · AIVEN"
+          }
+        }[step];
+        setBusy(true, config.title, config.detail);
+        emptyState.hidden = true;
+        output.hidden = true;
+        document.getElementById("view-title").textContent = config.heading;
+        document.getElementById("view-description").textContent = config.description;
+
+        try {
+          const payload = step === "load" ? { database: selectedTarget } : undefined;
+          const data = await request(config.url, payload);
+          renderMetrics(data, config.metricKeys);
+          if (step === "load") {
+            renderTable({
+              preview_columns: ["table", "database", "target"],
+              preview: [{ table: data.table, database: data.database, target: data.target }]
+            }, config.previewTitle, config.badge);
+          } else {
+            renderTable(data, config.previewTitle, config.badge);
+          }
+          output.hidden = false;
+          buttons[step].dataset.locked = "true";
+          updatePipeline(step);
+          if (step === "extract") buttons.transform.disabled = false;
+          if (step === "transform") buttons.load.disabled = false;
+          statusText.textContent = step === "load" ? "CARGA COMPLETADA" : "FASE COMPLETADA";
+          showToast(step === "load" ? "Datos guardados en MySQL correctamente." : "Fase completada correctamente.");
+        } catch (error) {
+          document.getElementById("view-title").textContent = "No se pudo completar esta fase.";
+          document.getElementById("view-description").textContent = error.message;
+          statusPill.classList.add("failed");
+          statusText.textContent = "REVISAR CONEXIÓN";
+          showToast(error.message, true);
+        } finally {
+          setBusy(false);
+          statusPill.classList.remove("working");
+          Object.entries(buttons).forEach(([name, button]) => {
+            button.disabled = button.dataset.locked === "true" || (name === "transform" && !buttons.extract.dataset.locked) || (name === "load" && !buttons.transform.dataset.locked);
+          });
+        }
+      }
+
+      Object.entries(buttons).forEach(([step, button]) => {
+        button.addEventListener("click", () => runStep(step));
+      });
+    })();
+  </script>
+</body>
+</html>

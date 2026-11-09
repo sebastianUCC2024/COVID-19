@@ -130,14 +130,26 @@ def get_spark_session() -> SparkSession:
                     )
                 ).expanduser().resolve()
                 ivy_directory.mkdir(parents=True, exist_ok=True)
+                master = os.getenv("SPARK_MASTER", "local[*]")
                 _spark = (
                     SparkSession.builder.appName("seguimiento-epidemiologico")
-                    .master(os.getenv("SPARK_MASTER", "local[*]"))
+                    .master(master)
                     .config("spark.jars.packages", JDBC_PACKAGE)
                     .config("spark.jars.ivy", str(ivy_directory))
                     .config("spark.sql.session.timeZone", "UTC")
-                    .getOrCreate()
                 )
+                if master.startswith("local"):
+                    _spark = (
+                        _spark.config(
+                            "spark.driver.host",
+                            os.getenv("SPARK_DRIVER_HOST", "127.0.0.1"),
+                        )
+                        .config(
+                            "spark.driver.bindAddress",
+                            os.getenv("SPARK_DRIVER_BIND_ADDRESS", "127.0.0.1"),
+                        )
+                    )
+                _spark = _spark.getOrCreate()
                 _spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "ERROR"))
             except Exception as exc:
                 logger.exception("No se pudo iniciar Spark")

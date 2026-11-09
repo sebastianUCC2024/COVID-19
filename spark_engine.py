@@ -30,7 +30,9 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from db_config import DatabaseConfig
+from sqlalchemy import text
+
+from db_config import DatabaseConfig, create_sqlalchemy_engine
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +428,6 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
         if _processed_df is None:
             raise SparkEngineError("Primero ejecuta la transformación ETL.")
 
-        spark = get_spark_session()
         jdbc_url = (
             f"jdbc:mysql://{db_config.host}:{db_config.port}/{db_config.database}"
             f"?sslMode={db_config.jdbc_ssl_mode}"
@@ -437,8 +438,7 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
         quoted_target = f"`{TARGET_TABLE}`"
         quoted_staging = f"`{staging_table}`"
         quoted_backup = f"`{backup_table}`"
-        connection = None
-        statement = None
+        engine = create_sqlalchemy_engine(db_config)
         staging_created = False
         swap_completed = False
 
@@ -447,60 +447,48 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                 _processed_df,
                 staging_table,
             )
-            connection = spark._jvm.java.sql.DriverManager.getConnection(
-                jdbc_url,
-                db_config.username,
-                db_config.password,
-            )
-            statement = connection.createStatement()
-            statement.execute(create_table_sql)
-            staging_created = True
+            with engine.connect() as connection:
+                connection.exec_driver_sql(create_table_sql)
+                staging_created = True
 
-            (
-                _processed_df.write.format("jdbc")
-                .option("url", jdbc_url)
-                .option("dbtable", staging_table)
-                .option("user", db_config.username)
-                .option("password", db_config.password)
-                .option("driver", JDBC_DRIVER)
-                .mode("append")
-                .save()
-            )
-
-            table_check = connection.prepareStatement(
-                "SELECT COUNT(*) FROM information_schema.tables "
-                "WHERE table_schema = ? AND table_name = ?"
-            )
-            try:
-                table_check.setString(1, db_config.database)
-                table_check.setString(2, TARGET_TABLE)
-                result_set = table_check.executeQuery()
-                try:
-                    target_exists = result_set.next() and result_set.getInt(1) > 0
-                finally:
-                    result_set.close()
-            finally:
-                table_check.close()
-
-            if target_exists:
-                statement.execute(
-                    f"RENAME TABLE {quoted_target} TO {quoted_backup}, "
-                    f"{quoted_staging} TO {quoted_target}"
+                (
+                    _processed_df.write.format("jdbc")
+                    .option("url", jdbc_url)
+                    .option("dbtable", staging_table)
+                    .option("user", db_config.username)
+                    .option("password", db_config.password)
+                    .option("driver", JDBC_DRIVER)
+                    .mode("append")
+                    .save()
                 )
-                swap_completed = True
-                try:
-                    statement.execute(f"DROP TABLE {quoted_backup}")
-                except Exception:
-                    logger.warning(
-                        "La carga se completó, pero no se pudo eliminar la tabla de respaldo %s",
-                        backup_table,
-                        exc_info=True,
+
+                target_exists = connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = :database AND table_name = :table"
+                    ),
+                    {"database": db_config.database, "table": TARGET_TABLE},
+                ).scalar_one() > 0
+
+                if target_exists:
+                    connection.exec_driver_sql(
+                        f"RENAME TABLE {quoted_target} TO {quoted_backup}, "
+                        f"{quoted_staging} TO {quoted_target}"
                     )
-            else:
-                statement.execute(
-                    f"RENAME TABLE {quoted_staging} TO {quoted_target}"
-                )
-                swap_completed = True
+                    swap_completed = True
+                    try:
+                        connection.exec_driver_sql(f"DROP TABLE {quoted_backup}")
+                    except Exception:
+                        logger.warning(
+                            "La carga se completó, pero no se pudo eliminar la tabla de respaldo %s",
+                            backup_table,
+                            exc_info=True,
+                        )
+                else:
+                    connection.exec_driver_sql(
+                        f"RENAME TABLE {quoted_staging} TO {quoted_target}"
+                    )
+                    swap_completed = True
         except Exception as exc:
             if isinstance(exc, SparkEngineError):
                 raise
@@ -509,23 +497,19 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                 "No fue posible cargar los datos en MySQL. Verifica la conexión, credenciales y permisos."
             ) from exc
         finally:
-            if connection is not None:
-                if staging_created and not swap_completed:
-                    try:
-                        cleanup_statement = connection.createStatement()
-                        try:
-                            cleanup_statement.execute(f"DROP TABLE IF EXISTS {quoted_staging}")
-                        finally:
-                            cleanup_statement.close()
-                    except Exception:
-                        logger.warning(
-                            "No se pudo limpiar la tabla temporal %s",
-                            staging_table,
-                            exc_info=True,
+            if staging_created and not swap_completed:
+                try:
+                    with engine.begin() as cleanup_connection:
+                        cleanup_connection.exec_driver_sql(
+                            f"DROP TABLE IF EXISTS {quoted_staging}"
                         )
-                if statement is not None:
-                    statement.close()
-                connection.close()
+                except Exception:
+                    logger.warning(
+                        "No se pudo limpiar la tabla temporal %s",
+                        staging_table,
+                        exc_info=True,
+                    )
+            engine.dispose()
 
         return {
             "table": TARGET_TABLE,

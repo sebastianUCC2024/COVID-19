@@ -123,10 +123,18 @@ def get_spark_session() -> SparkSession:
     with _lock:
         if _spark is None:
             try:
+                ivy_directory = Path(
+                    os.getenv(
+                        "SPARK_IVY_DIR",
+                        str(Path(tempfile.gettempdir()) / "spark-ivy"),
+                    )
+                ).expanduser().resolve()
+                ivy_directory.mkdir(parents=True, exist_ok=True)
                 _spark = (
                     SparkSession.builder.appName("seguimiento-epidemiologico")
                     .master(os.getenv("SPARK_MASTER", "local[*]"))
                     .config("spark.jars.packages", JDBC_PACKAGE)
+                    .config("spark.jars.ivy", str(ivy_directory))
                     .config("spark.sql.session.timeZone", "UTC")
                     .getOrCreate()
                 )

@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,19 @@ import requests
 from pyspark import StorageLevel
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, StringType
+from pyspark.sql.types import (
+    BooleanType,
+    ByteType,
+    DateType,
+    DecimalType,
+    DoubleType,
+    FloatType,
+    IntegerType,
+    LongType,
+    ShortType,
+    StringType,
+    TimestampType,
+)
 
 from db_config import DatabaseConfig
 
@@ -103,6 +116,18 @@ PREVIEW_COLUMNS = (
     "promedio_movil_7d",
     "grupo_etario_pais",
 )
+MYSQL_TYPE_BY_SPARK_TYPE = {
+    BooleanType: "BOOLEAN",
+    ByteType: "TINYINT",
+    DateType: "DATE",
+    DecimalType: "DECIMAL(38, 18)",
+    DoubleType: "DOUBLE",
+    FloatType: "DOUBLE",
+    IntegerType: "INT",
+    LongType: "BIGINT",
+    ShortType: "SMALLINT",
+    TimestampType: "DATETIME(6)",
+}
 
 _lock = threading.RLock()
 _spark: SparkSession | None = None
@@ -351,32 +376,156 @@ def transformar_datos_pyspark() -> dict[str, Any]:
         }
 
 
+def _mysql_staging_table_ddl(frame: DataFrame, table_name: str) -> str:
+    """Create MySQL DDL with a composite primary key for a processed frame."""
+    if not table_name.replace("_", "").isalnum():
+        raise SparkEngineError("El nombre de la tabla temporal no es válido.")
+
+    available_columns = set(frame.columns)
+    if not {"location", "date"}.issubset(available_columns):
+        raise SparkEngineError(
+            "El dataset transformado no contiene las columnas de clave primaria."
+        )
+
+    column_definitions = []
+    for field in frame.schema.fields:
+        column_name = field.name
+        if not column_name.replace("_", "").isalnum():
+            raise SparkEngineError("El esquema contiene un nombre de columna inválido.")
+        if column_name == "location":
+            mysql_type = "VARCHAR(191)"
+        elif isinstance(field.dataType, StringType):
+            mysql_type = "VARCHAR(255)"
+        else:
+            mysql_type = next(
+                (
+                    sql_type
+                    for spark_type, sql_type in MYSQL_TYPE_BY_SPARK_TYPE.items()
+                    if isinstance(field.dataType, spark_type)
+                ),
+                None,
+            )
+            if mysql_type is None:
+                raise SparkEngineError(
+                    f"Tipo de dato no soportado para MySQL: {field.dataType.simpleString()}."
+                )
+
+        not_null = " NOT NULL" if column_name in {"location", "date"} else ""
+        column_definitions.append(f"`{column_name}` {mysql_type}{not_null}")
+
+    column_definitions.append("PRIMARY KEY (`location`, `date`)")
+    return (
+        f"CREATE TABLE `{table_name}` ({', '.join(column_definitions)}) "
+        "ENGINE=InnoDB"
+    )
+
+
 def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
-    """Overwrite the target MySQL table using the Spark JDBC writer and SSL."""
+    """Atomically replace the MySQL table with a PK-constrained Spark load."""
     with _lock:
         if _processed_df is None:
             raise SparkEngineError("Primero ejecuta la transformación ETL.")
 
+        spark = get_spark_session()
         jdbc_url = (
             f"jdbc:mysql://{db_config.host}:{db_config.port}/{db_config.database}"
             f"?sslMode={db_config.jdbc_ssl_mode}"
         )
+        suffix = uuid.uuid4().hex[:12]
+        staging_table = f"{TARGET_TABLE}_stage_{suffix}"
+        backup_table = f"{TARGET_TABLE}_backup_{suffix}"
+        quoted_target = f"`{TARGET_TABLE}`"
+        quoted_staging = f"`{staging_table}`"
+        quoted_backup = f"`{backup_table}`"
+        connection = None
+        statement = None
+        staging_created = False
+        swap_completed = False
+
         try:
+            create_table_sql = _mysql_staging_table_ddl(
+                _processed_df,
+                staging_table,
+            )
+            connection = spark._jvm.java.sql.DriverManager.getConnection(
+                jdbc_url,
+                db_config.username,
+                db_config.password,
+            )
+            statement = connection.createStatement()
+            statement.execute(create_table_sql)
+            staging_created = True
+
             (
                 _processed_df.write.format("jdbc")
                 .option("url", jdbc_url)
-                .option("dbtable", TARGET_TABLE)
+                .option("dbtable", staging_table)
                 .option("user", db_config.username)
                 .option("password", db_config.password)
                 .option("driver", JDBC_DRIVER)
-                .mode("overwrite")
+                .mode("append")
                 .save()
             )
+
+            table_check = connection.prepareStatement(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_name = ?"
+            )
+            try:
+                table_check.setString(1, db_config.database)
+                table_check.setString(2, TARGET_TABLE)
+                result_set = table_check.executeQuery()
+                try:
+                    target_exists = result_set.next() and result_set.getInt(1) > 0
+                finally:
+                    result_set.close()
+            finally:
+                table_check.close()
+
+            if target_exists:
+                statement.execute(
+                    f"RENAME TABLE {quoted_target} TO {quoted_backup}, "
+                    f"{quoted_staging} TO {quoted_target}"
+                )
+                swap_completed = True
+                try:
+                    statement.execute(f"DROP TABLE {quoted_backup}")
+                except Exception:
+                    logger.warning(
+                        "La carga se completó, pero no se pudo eliminar la tabla de respaldo %s",
+                        backup_table,
+                        exc_info=True,
+                    )
+            else:
+                statement.execute(
+                    f"RENAME TABLE {quoted_staging} TO {quoted_target}"
+                )
+                swap_completed = True
         except Exception as exc:
+            if isinstance(exc, SparkEngineError):
+                raise
             logger.exception("No se pudo cargar el dataset en MySQL")
             raise SparkEngineError(
                 "No fue posible cargar los datos en MySQL. Verifica la conexión, credenciales y permisos."
             ) from exc
+        finally:
+            if connection is not None:
+                if staging_created and not swap_completed:
+                    try:
+                        cleanup_statement = connection.createStatement()
+                        try:
+                            cleanup_statement.execute(f"DROP TABLE IF EXISTS {quoted_staging}")
+                        finally:
+                            cleanup_statement.close()
+                    except Exception:
+                        logger.warning(
+                            "No se pudo limpiar la tabla temporal %s",
+                            staging_table,
+                            exc_info=True,
+                        )
+                if statement is not None:
+                    statement.close()
+                connection.close()
 
         return {
             "table": TARGET_TABLE,

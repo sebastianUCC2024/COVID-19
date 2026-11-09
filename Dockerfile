@@ -9,11 +9,14 @@ FROM python:3.10-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/home/respira \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
     PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:${PATH}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openjdk-17-jre-headless ca-certificates \
+    && groupadd --system --gid 10001 respira \
+    && useradd --system --uid 10001 --gid respira --home-dir /home/respira --create-home --shell /usr/sbin/nologin respira \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,7 +30,7 @@ COPY --chown=10001:10001 main.py spark_engine.py db_config.py ./
 COPY --chown=10001:10001 templates ./templates
 COPY --chown=10001:10001 static ./static
 
-USER 10001:10001
+USER respira
 EXPOSE 8000
 
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

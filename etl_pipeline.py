@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from pyspark import StorageLevel
+from py4j.protocol import Py4JNetworkError
+from pyspark import SparkContext, StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -155,10 +156,51 @@ class SparkEngineError(RuntimeError):
     """Raised when an ETL operation cannot be completed."""
 
 
+def _spark_gateway_is_alive() -> bool:
+    """Check that the Py4J gateway process and JVM are still reachable."""
+    if _spark is None:
+        return False
+
+    gateway = SparkContext._gateway
+    process = getattr(gateway, "proc", None)
+    if process is not None:
+        exit_code = process.poll()
+        if exit_code is not None:
+            logger.error("El proceso JVM de Spark terminó con código %s", exit_code)
+            return False
+
+    try:
+        _spark.sparkContext._jvm.java.lang.System.currentTimeMillis()
+    except (OSError, Py4JNetworkError):
+        logger.exception("El gateway JVM de Spark no responde")
+        return False
+    return True
+
+
+def _discard_spark_state() -> None:
+    """Forget Spark objects whose JVM has exited without calling the dead gateway."""
+    global _spark, _raw_df, _processed_df, _download_directory, _source_stats, _etl_metrics
+    _spark = None
+    _raw_df = None
+    _processed_df = None
+    _source_stats = None
+    _etl_metrics = None
+    if _download_directory is not None:
+        shutil.rmtree(_download_directory, ignore_errors=True)
+    _download_directory = None
+    SparkSession._instantiatedSession = None
+    SparkSession._activeSession = None
+    SparkContext._active_spark_context = None
+    SparkContext._gateway = None
+    SparkContext._jvm = None
+
+
 def get_spark_session() -> SparkSession:
     """Return the process-wide Spark session, creating it only once."""
     global _spark
     with _lock:
+        if _spark is not None and not _spark_gateway_is_alive():
+            _discard_spark_state()
         if _spark is None:
             try:
                 ivy_directory = Path(
@@ -313,6 +355,12 @@ def transformar_datos_pyspark() -> dict[str, Any]:
     with _lock:
         if _raw_df is None:
             raise SparkEngineError("Primero descarga el dataset crudo.")
+        if not _spark_gateway_is_alive():
+            _discard_spark_state()
+            raise SparkEngineError(
+                "La JVM de Spark se cerró y el dataset en memoria ya no está disponible. "
+                "Vuelve a ejecutar la extracción."
+            )
 
         processed: DataFrame | None = None
         cached_intermediates: list[DataFrame] = []
@@ -668,19 +716,14 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
 
 def close_spark_session() -> None:
     """Release cached DataFrames, downloaded data, and the Spark session."""
-    global _spark, _raw_df, _processed_df, _download_directory, _source_stats, _etl_metrics
     with _lock:
+        if _spark is not None and not _spark_gateway_is_alive():
+            _discard_spark_state()
+            return
         if _raw_df is not None:
             _raw_df.unpersist()
         if _processed_df is not None:
             _processed_df.unpersist()
         if _spark is not None:
             _spark.stop()
-        if _download_directory is not None:
-            shutil.rmtree(_download_directory, ignore_errors=True)
-        _spark = None
-        _raw_df = None
-        _processed_df = None
-        _download_directory = None
-        _source_stats = None
-        _etl_metrics = None
+        _discard_spark_state()

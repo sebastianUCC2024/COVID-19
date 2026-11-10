@@ -28,6 +28,7 @@ from etl_pipeline import (
 )
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("py4j").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent

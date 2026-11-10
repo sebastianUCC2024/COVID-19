@@ -11,7 +11,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/home/respira \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
-    PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:${PATH}"
+    PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:${PATH}" \
+    SPARK_DRIVER_MEMORY=2g \
+    SPARK_EXECUTOR_MEMORY=1g \
+    SPARK_LOG_LEVEL=INFO \
+    SPARK_JDBC_BATCH_SIZE=10000 \
+    SPARK_SQL_SHUFFLE_PARTITIONS=8
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openjdk-17-jre-headless ca-certificates \

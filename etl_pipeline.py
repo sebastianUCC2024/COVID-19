@@ -257,29 +257,45 @@ def get_spark_session() -> SparkSession:
                 ).expanduser().resolve()
                 ivy_directory.mkdir(parents=True, exist_ok=True)
                 master = os.getenv("SPARK_MASTER", "local[*]")
-                _spark = (
+                driver_memory = os.getenv("SPARK_DRIVER_MEMORY", "2g")
+                executor_memory = os.getenv("SPARK_EXECUTOR_MEMORY", "1g")
+                driver_max_result_size = os.getenv("SPARK_DRIVER_MAX_RESULT_SIZE", "1g")
+                shuffle_partitions = os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "8")
+                log_level = os.getenv("SPARK_LOG_LEVEL", "INFO")
+
+                logger.info(
+                    "Configurando SparkSession [master=%s, driver_memory=%s, executor_memory=%s, shuffle_partitions=%s, log_level=%s]",
+                    master,
+                    driver_memory,
+                    executor_memory,
+                    shuffle_partitions,
+                    log_level,
+                )
+
+                builder = (
                     SparkSession.builder.appName("seguimiento-epidemiologico")
                     .master(master)
                     .config("spark.jars.packages", JDBC_PACKAGE)
                     .config("spark.jars.ivy", str(ivy_directory))
                     .config("spark.sql.session.timeZone", "UTC")
-                    .config(
-                        "spark.sql.shuffle.partitions",
-                        os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "8"),
-                    )
+                    .config("spark.driver.memory", driver_memory)
+                    .config("spark.executor.memory", executor_memory)
+                    .config("spark.driver.maxResultSize", driver_max_result_size)
+                    .config("spark.sql.shuffle.partitions", shuffle_partitions)
                 )
                 if master.startswith("local"):
                     driver_host = os.getenv("SPARK_DRIVER_HOST")
                     driver_bind_address = os.getenv("SPARK_DRIVER_BIND_ADDRESS")
                     if driver_host:
-                        _spark = _spark.config("spark.driver.host", driver_host)
+                        builder = builder.config("spark.driver.host", driver_host)
                     if driver_bind_address:
-                        _spark = _spark.config(
+                        builder = builder.config(
                             "spark.driver.bindAddress",
                             driver_bind_address,
                         )
-                _spark = _spark.getOrCreate()
-                _spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "ERROR"))
+                _spark = builder.getOrCreate()
+                _spark.sparkContext.setLogLevel(log_level)
+                logger.info("SparkSession inicializada correctamente.")
             except Exception as exc:
                 logger.exception("No se pudo iniciar Spark")
                 raise SparkEngineError(
@@ -301,14 +317,20 @@ def extraer_dataset() -> dict[str, Any]:
         temporary_directory: Path | None = None
         frame: DataFrame | None = None
         try:
+            logger.info("Iniciando descarga del dataset COVID-19/OWID desde %s...", DATASET_URL)
             temporary_directory = Path(tempfile.mkdtemp(prefix="epidemiologia-"))
             csv_path = temporary_directory / "owid-covid-data.csv"
+            total_bytes = 0
             with requests.get(DATASET_URL, stream=True, timeout=(15, 180)) as response:
                 response.raise_for_status()
                 with csv_path.open("wb") as csv_file:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if chunk:
                             csv_file.write(chunk)
+                            total_bytes += len(chunk)
+
+            file_size_mb = total_bytes / (1024 * 1024)
+            logger.info("Descarga finalizada (%.2f MB). Leyendo CSV con PySpark...", file_size_mb)
 
             frame = (
                 spark.read.option("header", True)
@@ -318,6 +340,11 @@ def extraer_dataset() -> dict[str, Any]:
             )
             frame.persist(StorageLevel.DISK_ONLY)
             row_count = frame.count()
+            logger.info(
+                "Dataset crudo cargado en PySpark: %d registros, %d columnas.",
+                row_count,
+                len(frame.columns),
+            )
             preview_columns = (
                 "iso_code",
                 "location",
@@ -410,6 +437,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
         processed: DataFrame | None = None
         cached_intermediates: list[DataFrame] = []
         try:
+            logger.info("Iniciando transformación y limpieza del dataset con PySpark...")
             selected = _add_missing_columns(_normalize_source_schema(_raw_df))
             typed = selected.withColumn(
                 "location", _clean_text_column("location", lowercase=True)
@@ -451,6 +479,10 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                 F.sum(F.when(null_key_condition, 1).otherwise(0)).alias("removed")
             ).first()
             removed_null_keys = int(null_key_stats["removed"] or 0)
+            logger.info(
+                "Paso 1/4: Esquema normalizado. Claves nulas descartadas: %d.",
+                removed_null_keys,
+            )
             keyed = typed.filter(~null_key_condition)
 
             aggregate_condition = F.col("iso_code").startswith("OWID_")
@@ -461,6 +493,10 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             removed_aggregates = int(aggregate_stats["removed"] or 0)
             countries = keyed.filter(~aggregate_condition)
             before_deduplication = int(aggregate_stats["countries"] or 0)
+            logger.info(
+                "Paso 2/4: Agregados regionales OWID descartados: %d. Deduplicando por (location, date)...",
+                removed_aggregates,
+            )
             deduplicated = countries.dropDuplicates(["location", "date"])
             deduplicated = deduplicated.persist(StorageLevel.DISK_ONLY)
             cached_intermediates.append(deduplicated)
@@ -476,6 +512,11 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             imputed_daily_values = sum(
                 int(deduplicated_stats[column] or 0) for column in IMPUTED_COLUMNS
             )
+            logger.info(
+                "Deduplicación finalizada: %d duplicados eliminados. Nulos diarios imputados: %d.",
+                removed_duplicates,
+                imputed_daily_values,
+            )
             filled = deduplicated.fillna(0, subset=list(IMPUTED_COLUMNS))
             first_case = Window.partitionBy("location")
             with_first_case = filled.withColumn(
@@ -484,6 +525,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                     F.when(F.col("total_cases") > 0, F.col("date"))
                 ).over(first_case),
             )
+            logger.info("Paso 3/4: Filtrando observaciones previas al primer caso por país...")
             active_countries = with_first_case.filter(
                 F.col("_first_case_date").isNotNull()
                 & (F.col("date") >= F.col("_first_case_date"))
@@ -494,6 +536,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                 .rangeBetween(-6 * 24 * 60 * 60, 0)
             )
 
+            logger.info("Paso 4/4: Calculando ventana móvil de 7 días, tasa de letalidad y grupos etarios...")
             processed = (
                 active_countries.withColumn(
                     "tasa_letalidad",
@@ -513,10 +556,15 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                     .when(F.col("aged_65_older") >= 8, "Población Intermedia")
                     .otherwise("Población Joven"),
                 )
-                .persist(StorageLevel.DISK_ONLY)
+                .persist(StorageLevel.MEMORY_AND_DISK)
             )
             row_count = processed.count()
             removed_pre_first_case = after_deduplication - row_count
+            logger.info(
+                "Transformación completada con éxito. Registros resultantes: %d (excluidas %d filas previas al 1er caso).",
+                row_count,
+                removed_pre_first_case,
+            )
             preview = _preview(processed, PREVIEW_COLUMNS)
             for frame in cached_intermediates:
                 frame.unpersist()
@@ -647,6 +695,13 @@ def recrear_tabla_aiven(db_config: DatabaseConfig) -> dict[str, Any]:
     if db_config.target != "cloud":
         raise SparkEngineError("El reseteo solo está permitido para Aiven Cloud.")
 
+    logger.info(
+        "Iniciando recreación de tabla '%s' en Aiven MySQL (%s:%s/%s)...",
+        TARGET_TABLE,
+        db_config.host,
+        db_config.port,
+        db_config.database,
+    )
     engine = create_sqlalchemy_engine(db_config)
     try:
         with engine.begin() as connection:
@@ -656,6 +711,10 @@ def recrear_tabla_aiven(db_config: DatabaseConfig) -> dict[str, Any]:
             connection.exec_driver_sql(
                 _mysql_empty_table_ddl(TARGET_TABLE)
             )
+        logger.info(
+            "Tabla '%s' recreada exitosamente en Aiven MySQL con índices y PK.",
+            TARGET_TABLE,
+        )
     except Exception as exc:
         logger.exception("No se pudo recrear la tabla epidemiológica en Aiven")
         raise SparkEngineError(
@@ -685,9 +744,16 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                 "Si se repite, revisa el límite de memoria y los logs de Railway."
             )
 
+        batch_size = os.getenv("SPARK_JDBC_BATCH_SIZE", "10000")
+        connect_timeout_ms = os.getenv("SPARK_JDBC_CONNECT_TIMEOUT_MS", "60000")
+        socket_timeout_ms = os.getenv("SPARK_JDBC_SOCKET_TIMEOUT_MS", "60000")
+
         jdbc_url = (
             f"jdbc:mysql://{db_config.host}:{db_config.port}/{db_config.database}"
             f"?sslMode={db_config.jdbc_ssl_mode}"
+            f"&connectTimeout={connect_timeout_ms}"
+            f"&socketTimeout={socket_timeout_ms}"
+            f"&rewriteBatchedStatements=true"
         )
         suffix = uuid.uuid4().hex[:12]
         staging_table = f"{TARGET_TABLE}_stage_{suffix}"
@@ -699,27 +765,60 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
         staging_created = False
         swap_completed = False
 
+        total_rows = _etl_metrics.get("rows", 0) if _etl_metrics else 0
+        logger.info(
+            "Iniciando persistencia a MySQL (%s) en %s:%s/%s. Registros a cargar: %d.",
+            db_config.target,
+            db_config.host,
+            db_config.port,
+            db_config.database,
+            total_rows,
+        )
+
         try:
             create_table_sql = _mysql_staging_table_ddl(
                 _processed_df,
                 staging_table,
             )
-            with engine.connect() as connection:
+            with engine.begin() as connection:
                 connection.exec_driver_sql(create_table_sql)
                 staging_created = True
+            concurrency = int(os.getenv("SPARK_JDBC_CONCURRENCY", "4"))
+            logger.info(
+                "Tabla staging '%s' creada. Iniciando inserción por lotes con PySpark "
+                "(batchsize=%s, concurrencia=%d particiones)...",
+                staging_table,
+                batch_size,
+                concurrency,
+            )
 
-                (
-                    _processed_df.write.format("jdbc")
-                    .option("url", jdbc_url)
-                    .option("dbtable", staging_table)
-                    .option("user", db_config.username)
-                    .option("password", db_config.password)
-                    .option("driver", JDBC_DRIVER)
-                    .option("truncate", "true")
-                    .mode("overwrite")
-                    .save()
+            (
+                _processed_df.coalesce(concurrency)
+                .write.format("jdbc")
+                .option("url", jdbc_url)
+                .option("dbtable", staging_table)
+                .option("user", db_config.username)
+                .option("password", db_config.password)
+                .option("driver", JDBC_DRIVER)
+                .option("batchsize", batch_size)
+                .option("connectTimeout", connect_timeout_ms)
+                .option("socketTimeout", socket_timeout_ms)
+                .option("truncate", "true")
+                .mode("overwrite")
+                .save()
+            )
+            logger.info("Inserción masiva en staging finalizada. Construyendo índices secundarios para Power BI...")
+
+            with engine.begin() as index_connection:
+                index_connection.exec_driver_sql(
+                    f"CREATE INDEX `idx_seguimiento_date` ON {quoted_staging} (`date`)"
                 )
+                index_connection.exec_driver_sql(
+                    f"CREATE INDEX `idx_seguimiento_iso_code` ON {quoted_staging} (`iso_code`)"
+                )
+            logger.info("Índices secundarios construidos con éxito. Realizando intercambio atómico...")
 
+            with engine.begin() as connection:
                 target_exists = connection.execute(
                     text(
                         "SELECT COUNT(*) FROM information_schema.tables "
@@ -747,6 +846,7 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                         f"RENAME TABLE {quoted_staging} TO {quoted_target}"
                     )
                     swap_completed = True
+            logger.info("Intercambio atómico completado exitosamente. Tabla '%s' actualizada.", TARGET_TABLE)
         except Exception as exc:
             if isinstance(exc, SparkEngineError):
                 raise

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import URL, Engine, create_engine
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class DatabaseConfigurationError(ValueError):
@@ -56,6 +60,16 @@ def get_database_config(target: str) -> DatabaseConfig:
     if not 1 <= port <= 65535:
         raise DatabaseConfigurationError(f"{prefix}_PORT debe estar entre 1 y 65535.")
 
+    custom_ssl_mode = os.getenv(f"{prefix}_SSL_MODE")
+    if custom_ssl_mode:
+        ssl_mode = custom_ssl_mode.strip().upper()
+    elif target == "local":
+        ssl_mode = "DISABLED"
+    elif "railway" in values["HOST"].lower() or "rlwy.net" in values["HOST"].lower():
+        ssl_mode = "PREFERRED"
+    else:
+        ssl_mode = "REQUIRED"
+
     return DatabaseConfig(
         target=target,
         host=values["HOST"].strip(),
@@ -63,12 +77,12 @@ def get_database_config(target: str) -> DatabaseConfig:
         username=values["USER"],
         password=values["PASSWORD"],
         database=values["NAME"].strip(),
-        jdbc_ssl_mode="DISABLED" if target == "local" else "REQUIRED",
+        jdbc_ssl_mode=ssl_mode,
     )
 
 
 def create_sqlalchemy_engine(db_config: DatabaseConfig) -> Engine:
-    """Create a pooled SQLAlchemy engine, enabling TLS for the cloud target."""
+    """Create a pooled SQLAlchemy engine, enabling TLS and timeouts for cloud target."""
     url = URL.create(
         drivername="mysql+pymysql",
         username=db_config.username,
@@ -77,7 +91,13 @@ def create_sqlalchemy_engine(db_config: DatabaseConfig) -> Engine:
         port=db_config.port,
         database=db_config.database,
     )
-    connect_args = {"ssl": {}} if db_config.target == "cloud" else {}
+    connect_args: dict[str, object] = {
+        "connect_timeout": 60,
+        "read_timeout": 60,
+        "write_timeout": 60,
+    }
+    if db_config.jdbc_ssl_mode == "REQUIRED":
+        connect_args["ssl"] = {}
     return create_engine(
         url,
         pool_pre_ping=True,

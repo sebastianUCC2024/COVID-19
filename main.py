@@ -28,7 +28,11 @@ from etl_pipeline import (
     recrear_tabla_aiven,
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logging.getLogger("py4j").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -124,19 +128,23 @@ async def health_check() -> dict[str, Any]:
     description="Descarga el CSV consolidado OWID y lo lee con PySpark.",
 )
 async def extract_data() -> dict:
+    logger.info("Recibida petición POST /api/extract")
     try:
         result = await run_in_threadpool(extraer_dataset)
     except SparkEngineError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    logger.info("Petición POST /api/extract completada con éxito.")
     return {"status": "success", "data": result, "message": "Dataset descargado"}
 
 
 @app.post("/api/transform")
 async def transform_data() -> dict:
+    logger.info("Recibida petición POST /api/transform")
     try:
         result = await run_in_threadpool(transformar_datos_pyspark)
     except SparkEngineError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("Petición POST /api/transform completada con éxito.")
     return {"status": "success", "data": result, "message": "ETL completado"}
 
 
@@ -144,6 +152,7 @@ async def transform_data() -> dict:
 async def recreate_cloud_table(
     x_reset_token: str | None = Header(default=None),
 ) -> dict:
+    logger.info("Recibida petición POST /api/recrear-tabla")
     expected_token = os.getenv("TABLE_RESET_TOKEN", "")
     if len(expected_token) < 32:
         raise HTTPException(
@@ -151,6 +160,7 @@ async def recreate_cloud_table(
             detail="El reseteo está deshabilitado: configura un TABLE_RESET_TOKEN de 32 caracteres o más.",
         )
     if not x_reset_token or not hmac.compare_digest(x_reset_token, expected_token):
+        logger.warning("Intento de reseteo con token inválido.")
         raise HTTPException(status_code=403, detail="Token de reseteo inválido.")
 
     try:
@@ -162,6 +172,7 @@ async def recreate_cloud_table(
         result = await run_in_threadpool(recrear_tabla_aiven, database)
     except SparkEngineError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    logger.info("Petición POST /api/recrear-tabla completada con éxito.")
     return {
         "status": "success",
         "data": result,
@@ -171,6 +182,7 @@ async def recreate_cloud_table(
 
 @app.post("/api/load")
 async def load_data(payload: LoadRequest) -> dict:
+    logger.info("Recibida petición POST /api/load para destino: %s", payload.database)
     try:
         database = get_database_config(payload.database)
     except DatabaseConfigurationError as exc:
@@ -182,4 +194,5 @@ async def load_data(payload: LoadRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SparkEngineError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    logger.info("Petición POST /api/load finalizada con éxito.")
     return {"status": "success", "data": result, "message": "Datos cargados en MySQL"}

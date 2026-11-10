@@ -754,15 +754,18 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                 "Si se repite, revisa el límite de memoria y los logs de Railway."
             )
 
-        batch_size = os.getenv("SPARK_JDBC_BATCH_SIZE", "10000")
+        batch_size = os.getenv("SPARK_JDBC_BATCH_SIZE", "2000")
         connect_timeout_ms = os.getenv("SPARK_JDBC_CONNECT_TIMEOUT_MS", "60000")
-        socket_timeout_ms = os.getenv("SPARK_JDBC_SOCKET_TIMEOUT_MS", "60000")
+        socket_timeout_ms = os.getenv("SPARK_JDBC_SOCKET_TIMEOUT_MS", "300000")
 
         jdbc_url = (
             f"jdbc:mysql://{db_config.host}:{db_config.port}/{db_config.database}"
             f"?sslMode={db_config.jdbc_ssl_mode}"
             f"&connectTimeout={connect_timeout_ms}"
             f"&socketTimeout={socket_timeout_ms}"
+            f"&tcpKeepAlive=true"
+            f"&autoReconnect=true"
+            f"&maxAllowedPacket=67108864"
             f"&rewriteBatchedStatements=true"
         )
         suffix = uuid.uuid4().hex[:12]
@@ -793,7 +796,7 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
             with engine.begin() as connection:
                 connection.exec_driver_sql(create_table_sql)
                 staging_created = True
-            concurrency = int(os.getenv("SPARK_JDBC_CONCURRENCY", "4"))
+            concurrency = int(os.getenv("SPARK_JDBC_CONCURRENCY", "2"))
             logger.info(
                 "Tabla staging '%s' creada. Iniciando inserción por lotes con PySpark "
                 "(batchsize=%s, concurrencia=%d particiones)...",
@@ -901,13 +904,17 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
 def close_spark_session() -> None:
     """Release cached DataFrames, downloaded data, and the Spark session."""
     with _lock:
-        if _spark is not None and not _spark_gateway_is_alive():
+        try:
+            if _spark is not None and not _spark_gateway_is_alive():
+                _discard_spark_state()
+                return
+            if _raw_df is not None:
+                _raw_df.unpersist()
+            if _processed_df is not None:
+                _processed_df.unpersist()
+            if _spark is not None:
+                _spark.stop()
+        except Exception:
+            logger.debug("Error cerrando SparkSession durante el apagado", exc_info=True)
+        finally:
             _discard_spark_state()
-            return
-        if _raw_df is not None:
-            _raw_df.unpersist()
-        if _processed_df is not None:
-            _processed_df.unpersist()
-        if _spark is not None:
-            _spark.stop()
-        _discard_spark_state()

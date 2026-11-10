@@ -279,7 +279,9 @@
           throw new Error("El servidor devolvió una respuesta no válida.");
         }
         if (!response.ok || result.status !== "success") {
-          throw new Error(result.message || "No se pudo completar la operación.");
+          const error = new Error(result.message || "No se pudo completar la operación.");
+          error.status = response.status;
+          throw error;
         }
         return result.data;
       }
@@ -366,6 +368,12 @@
           statusText.textContent = step === "load" ? "CARGA COMPLETADA" : "FASE COMPLETADA";
           showToast(step === "load" ? "Datos guardados en MySQL correctamente." : "Fase completada correctamente.");
         } catch (error) {
+          if (step === "load" && error.status === 409) {
+            buttons.extract.dataset.locked = "false";
+            buttons.transform.dataset.locked = "false";
+            transformComplete = false;
+            updatePipeline("extract");
+          }
           document.getElementById("view-title").textContent = "No se pudo completar esta fase.";
           document.getElementById("view-description").textContent = error.message;
           statusPill.classList.add("failed");

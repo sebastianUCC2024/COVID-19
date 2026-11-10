@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from db_config import DatabaseConfigurationError, get_database_config
 from etl_pipeline import (
+    SparkEngineStateError,
     SparkEngineError,
     close_spark_session,
     extraer_dataset,
@@ -177,6 +178,8 @@ async def load_data(payload: LoadRequest) -> dict:
 
     try:
         result = await run_in_threadpool(cargar_a_mysql, database)
+    except SparkEngineStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SparkEngineError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"status": "success", "data": result, "message": "Datos cargados en MySQL"}

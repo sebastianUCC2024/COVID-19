@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from py4j.protocol import Py4JError
+from py4j.protocol import Py4JError, Py4JNetworkError
 from pyspark import SparkContext, StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
@@ -156,6 +156,10 @@ class SparkEngineError(RuntimeError):
     """Raised when an ETL operation cannot be completed."""
 
 
+class SparkEngineStateError(SparkEngineError):
+    """Raised when the in-memory Spark state is unavailable or has expired."""
+
+
 def _spark_gateway_is_alive() -> bool:
     """Check that the Py4J gateway process and JVM are still reachable."""
     if _spark is None:
@@ -175,6 +179,24 @@ def _spark_gateway_is_alive() -> bool:
         logger.exception("El gateway JVM de Spark no responde")
         return False
     return True
+
+
+def _is_spark_gateway_failure(error: BaseException) -> bool:
+    """Detect gateway transport failures even when a health probe races them."""
+    pending = [error]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        if isinstance(current, (Py4JNetworkError, ConnectionRefusedError)):
+            return True
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
 
 
 def _discard_spark_state() -> None:
@@ -294,7 +316,7 @@ def extraer_dataset() -> dict[str, Any]:
                 .option("mode", "FAILFAST")
                 .csv(str(csv_path))
             )
-            frame.persist(StorageLevel.MEMORY_AND_DISK)
+            frame.persist(StorageLevel.DISK_ONLY)
             row_count = frame.count()
             preview_columns = (
                 "iso_code",
@@ -374,13 +396,13 @@ def _clean_text_column(column: str, lowercase: bool = False) -> Column:
 
 def transformar_datos_pyspark() -> dict[str, Any]:
     """Clean OWID observations, derive KPIs, and report cleaning counts."""
-    global _processed_df, _etl_metrics
+    global _raw_df, _processed_df, _download_directory, _etl_metrics
     with _lock:
         if _raw_df is None:
-            raise SparkEngineError("Primero descarga el dataset crudo.")
+            raise SparkEngineStateError("Primero descarga el dataset crudo.")
         if not _spark_gateway_is_alive():
             _discard_spark_state()
-            raise SparkEngineError(
+            raise SparkEngineStateError(
                 "La JVM de Spark se cerró y el dataset en memoria ya no está disponible. "
                 "Vuelve a ejecutar la extracción."
             )
@@ -416,7 +438,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                     ),
                 )
 
-            typed = typed.persist(StorageLevel.MEMORY_AND_DISK)
+            typed = typed.persist(StorageLevel.DISK_ONLY)
             cached_intermediates.append(typed)
             null_key_condition = (
                 F.col("iso_code").isNull()
@@ -440,7 +462,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             countries = keyed.filter(~aggregate_condition)
             before_deduplication = int(aggregate_stats["countries"] or 0)
             deduplicated = countries.dropDuplicates(["location", "date"])
-            deduplicated = deduplicated.persist(StorageLevel.MEMORY_AND_DISK)
+            deduplicated = deduplicated.persist(StorageLevel.DISK_ONLY)
             cached_intermediates.append(deduplicated)
             deduplicated_stats = deduplicated.agg(
                 F.count("*").alias("rows"),
@@ -491,13 +513,19 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                     .when(F.col("aged_65_older") >= 8, "Población Intermedia")
                     .otherwise("Población Joven"),
                 )
-                .persist(StorageLevel.MEMORY_AND_DISK)
+                .persist(StorageLevel.DISK_ONLY)
             )
             row_count = processed.count()
             removed_pre_first_case = after_deduplication - row_count
             preview = _preview(processed, PREVIEW_COLUMNS)
             for frame in cached_intermediates:
                 frame.unpersist()
+            if _raw_df is not None:
+                _raw_df.unpersist()
+            if _download_directory is not None:
+                shutil.rmtree(_download_directory, ignore_errors=True)
+            _raw_df = None
+            _download_directory = None
         except SparkEngineError:
             _release_cached_frames(cached_intermediates, processed)
             raise
@@ -508,10 +536,11 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                 processed,
             )
             if not gateway_alive:
-                raise SparkEngineError(
+                raise SparkEngineStateError(
                     "La JVM de Spark terminó durante la transformación. "
                     "El estado anterior fue descartado; vuelve a extraer el dataset "
-                    "y revisa los logs del servicio para identificar por qué terminó Java."
+                    "y revisa los logs del servicio. El dataset procesado ahora se conserva "
+                    "en disco local de Spark para reducir el uso de memoria del proceso."
                 ) from exc
             raise SparkEngineError(
                 "Falló la transformación del dataset. Revisa los logs del servidor."
@@ -521,6 +550,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             _processed_df.unpersist()
         _processed_df = processed
         _etl_metrics = {
+            "rows": row_count,
             "removed_null_keys": removed_null_keys,
             "removed_aggregates": removed_aggregates,
             "removed_duplicates": removed_duplicates,
@@ -646,7 +676,14 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
     """Atomically replace the MySQL table with a PK-constrained Spark load."""
     with _lock:
         if _processed_df is None:
-            raise SparkEngineError("Primero ejecuta la transformación ETL.")
+            raise SparkEngineStateError("Primero ejecuta la transformación ETL.")
+        if not _spark_gateway_is_alive():
+            _discard_spark_state()
+            raise SparkEngineStateError(
+                "La JVM de Spark terminó después de la transformación; no se puede "
+                "usar el DataFrame en memoria. Vuelve a ejecutar extracción y ETL. "
+                "Si se repite, revisa el límite de memoria y los logs de Railway."
+            )
 
         jdbc_url = (
             f"jdbc:mysql://{db_config.host}:{db_config.port}/{db_config.database}"
@@ -713,6 +750,17 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
         except Exception as exc:
             if isinstance(exc, SparkEngineError):
                 raise
+            if _is_spark_gateway_failure(exc) or not _spark_gateway_is_alive():
+                _discard_spark_state()
+                logger.error(
+                    "La JVM de Spark terminó durante la escritura JDBC",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                raise SparkEngineStateError(
+                    "La JVM de Spark terminó durante la carga. El estado en memoria "
+                    "se descartó; vuelve a ejecutar extracción y ETL. Revisa el uso "
+                    "de memoria y los logs de Railway."
+                ) from exc
             logger.exception("No se pudo cargar el dataset en MySQL")
             raise SparkEngineError(
                 "No fue posible cargar los datos en MySQL. Verifica la conexión, credenciales y permisos."
@@ -734,7 +782,7 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
 
         return {
             "table": TARGET_TABLE,
-            "rows": _processed_df.count(),
+            "rows": int(_etl_metrics["rows"]),
             "database": db_config.database,
             "target": db_config.target,
         }

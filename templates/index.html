@@ -46,7 +46,7 @@
       <aside class="pipeline-panel glass-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">PIPELINE</p><h2>Flujo de trabajo</h2></div>
-          <span class="step-count">04 <span>/ 04</span></span>
+          <span class="step-count">03 <span>/ 03</span></span>
         </div>
         <div class="steps" aria-label="Fases del procesamiento">
           <div class="step-item active" data-step="extract">
@@ -59,14 +59,9 @@
             <div class="step-label"><strong>Transformación</strong><small>Limpieza · KPIs · Spark</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
-          <div class="step-item" data-step="reset">
-            <span class="step-marker">03</span><span class="step-connector"></span>
-            <div class="step-label"><strong>Reseteo Aiven</strong><small>Recrear tabla destino</small></div>
-            <span class="step-state" aria-hidden="true">●</span>
-          </div>
           <div class="step-item" data-step="load">
-            <span class="step-marker">04</span>
-            <div class="step-label"><strong>Persistencia</strong><small>MySQL · JDBC seguro</small></div>
+            <span class="step-marker">03</span>
+            <div class="step-label"><strong>Persistencia</strong><small>MySQL · Carga Masiva</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
         </div>
@@ -84,7 +79,7 @@
 
       <section class="results-panel glass-panel" aria-live="polite">
         <div class="results-heading">
-          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h2 id="view-title">Tu flujo, en cuatro pasos.</h2></div>
+          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h2 id="view-title">Tu flujo, en tres pasos.</h2></div>
           <span class="status-pill" id="status-pill"><span class="status-dot"></span><span id="status-text">LISTO PARA INICIAR</span></span>
         </div>
         <p class="results-intro" id="view-description">Ejecuta cada fase para descubrir cómo los datos abiertos se convierten en información lista para analizar.</p>
@@ -100,13 +95,8 @@
             <span class="action-title">Ejecutar ETL <span aria-hidden="true">↗</span></span>
             <span class="action-detail">Limpiar, normalizar y calcular KPIs</span>
           </button>
-          <button type="button" class="action-card" id="reset-button" disabled>
-            <span class="action-number">03 / RESETEO AIVEN</span>
-            <span class="action-title">Recrear tabla <span aria-hidden="true">↻</span></span>
-            <span class="action-detail">Vaciar y preparar la tabla destino en la nube</span>
-          </button>
           <button type="button" class="action-card" id="load-button" disabled>
-            <span class="action-number">04 / PERSISTENCIA</span>
+            <span class="action-number">03 / PERSISTENCIA</span>
             <span class="action-title">Cargar a MySQL <span aria-hidden="true">↗</span></span>
             <span class="action-detail">Guardar el resultado en el destino elegido</span>
           </button>
@@ -140,7 +130,6 @@
       const buttons = {
         extract: document.getElementById("extract-button"),
         transform: document.getElementById("transform-button"),
-        reset: document.getElementById("reset-button"),
         load: document.getElementById("load-button")
       };
       const targetNote = document.getElementById("target-note");
@@ -152,7 +141,6 @@
       let selectedTarget = "local";
       let busy = false;
       let transformComplete = false;
-      let cloudTableReset = false;
 
       const labels = {
         rows: "REGISTROS",
@@ -166,8 +154,7 @@
       const numberFormat = new Intl.NumberFormat("es-ES");
 
       function updateActionAvailability() {
-        buttons.reset.disabled = busy || selectedTarget !== "cloud" || !transformComplete || cloudTableReset;
-        buttons.load.disabled = busy || !transformComplete || (selectedTarget === "cloud" && !cloudTableReset);
+        buttons.load.disabled = busy || !transformComplete;
         buttons.extract.disabled = busy || buttons.extract.dataset.locked === "true";
         buttons.transform.disabled = busy || buttons.transform.dataset.locked === "true" || !buttons.extract.dataset.locked;
       }
@@ -183,7 +170,7 @@
           });
           targetNote.textContent = selectedTarget === "local"
             ? "MySQL local · SSL desactivado"
-            : "Aiven Cloud · SSL requerido · requiere reset antes de cargar";
+            : "Nube MySQL (AWS RDS / Cloud) · Conexión segura";
           updateActionAvailability();
         });
       });
@@ -258,7 +245,7 @@
       }
 
       function updatePipeline(step) {
-        const order = ["extract", "transform", "reset", "load"];
+        const order = ["extract", "transform", "load"];
         const activeIndex = order.indexOf(step);
         document.querySelectorAll(".step-item").forEach((item, index) => {
           item.classList.toggle("complete", index < activeIndex || step === "load");
@@ -308,37 +295,18 @@
             previewTitle: "Muestra del dataset transformado",
             badge: "NORMALIZADO · SPARK"
           },
-          reset: {
-            url: "/api/recrear-tabla",
-            title: "Recreando tabla en Aiven",
-            detail: "Se vaciará la tabla existente y se creará su estructura optimizada.",
-            heading: "Tabla limpia, lista para cargar.",
-            description: "La tabla de Aiven se recreó vacía con su clave primaria e índices.",
-            metricKeys: ["rows"],
-            previewTitle: "Destino preparado",
-            badge: "AIVEN · TABLA VACÍA"
-          },
           load: {
             url: "/api/load",
             title: "Guardando en MySQL",
-            detail: `Persistiendo el dataset en ${selectedTarget === "local" ? "MySQL local" : "Aiven Cloud"}.`,
+            detail: `Persistiendo el dataset en ${selectedTarget === "local" ? "MySQL local" : "la Nube (AWS RDS)"}.`,
             heading: "Persistencia completada.",
             description: "Los datos transformados están disponibles en la tabla de seguimiento epidemiológico.",
             metricKeys: ["rows"],
             previewTitle: "Destino de persistencia",
-            badge: selectedTarget === "local" ? "MYSQL · LOCAL" : "MYSQL · AIVEN"
+            badge: selectedTarget === "local" ? "MYSQL · LOCAL" : "MYSQL · NUBE"
           }
         }[step];
-        let resetToken;
-        if (step === "reset") {
-          if (!window.confirm("Esta acción elimina los datos actuales de seguimiento_epidemiologico en Aiven. ¿Deseas continuar?")) return;
-          resetToken = window.prompt("Ingresa el token TABLE_RESET_TOKEN configurado en Railway.");
-          if (resetToken === null) return;
-          if (!resetToken.trim()) {
-            showToast("El token de reseteo es obligatorio.", true);
-            return;
-          }
-        }
+
         setBusy(true, config.title, config.detail);
         emptyState.hidden = true;
         output.hidden = true;
@@ -347,8 +315,7 @@
 
         try {
           const payload = step === "load" ? { database: selectedTarget } : undefined;
-          const headers = step === "reset" ? { "X-Reset-Token": resetToken } : {};
-          const data = await request(config.url, payload, headers);
+          const data = await request(config.url, payload);
           renderMetrics(data, config.metricKeys);
           if (step === "load") {
             renderTable({
@@ -363,7 +330,6 @@
           updatePipeline(step);
           if (step === "extract") buttons.transform.disabled = false;
           if (step === "transform") transformComplete = true;
-          if (step === "reset") cloudTableReset = true;
           updateActionAvailability();
           statusText.textContent = step === "load" ? "CARGA COMPLETADA" : "FASE COMPLETADA";
           showToast(step === "load" ? "Datos guardados en MySQL correctamente." : "Fase completada correctamente.");

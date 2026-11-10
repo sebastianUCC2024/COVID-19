@@ -26,7 +26,7 @@ COPY --from=builder /build/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r /tmp/requirements.txt \
     && rm -rf /wheels /tmp/requirements.txt
 
-COPY --chown=10001:10001 main.py spark_engine.py db_config.py ./
+COPY --chown=10001:10001 main.py etl_pipeline.py db_config.py ./
 COPY --chown=10001:10001 templates ./templates
 COPY --chown=10001:10001 static ./static
 

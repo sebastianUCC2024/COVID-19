@@ -14,7 +14,7 @@ from typing import Any
 
 import requests
 from pyspark import StorageLevel
-from pyspark.sql import DataFrame, SparkSession, Window
+from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     BooleanType,
@@ -37,16 +37,16 @@ from db_config import DatabaseConfig, create_sqlalchemy_engine
 logger = logging.getLogger(__name__)
 
 DATASET_URL = (
-    "https://raw.githubusercontent.com/rs-delve/covid19_datasets/master/"
-    "dataset/combined_dataset_latest.csv"
+    "https://raw.githubusercontent.com/owid/covid-19-data/master/"
+    "public/data/owid-covid-data.csv"
 )
-DATASET_REPOSITORY_URL = "https://github.com/rs-delve/covid19_datasets"
+DATASET_REPOSITORY_URL = "https://github.com/owid/covid-19-data"
 TARGET_TABLE = "seguimiento_epidemiologico"
 JDBC_DRIVER = "com.mysql.cj.jdbc.Driver"
 JDBC_PACKAGE = "com.mysql:mysql-connector-j:8.4.0"
 PREVIEW_LIMIT = 8
 
-# Canonical ETL names on the left; corresponding columns in the DELVE CSV on the right.
+# Canonical OWID columns, with legacy DELVE aliases retained for compatibility.
 SOURCE_COLUMN_ALIASES = {
     "iso_code": "ISO",
     "location": "country_name",
@@ -107,16 +107,27 @@ NUMERIC_COLUMNS = tuple(column for column in SELECTED_COLUMNS if column not in {
     "location",
     "date",
 })
-DAILY_METRICS = ("new_cases", "new_cases_smoothed", "new_deaths", "new_deaths_smoothed")
 PREVIEW_COLUMNS = (
     "location",
     "date",
     "total_cases",
     "new_cases",
     "total_deaths",
-    "letalidad_pct",
-    "promedio_movil_7d",
+    "tasa_letalidad",
+    "casos_promedio_7d",
     "grupo_etario_pais",
+)
+IMPUTED_COLUMNS = ("total_cases", "total_deaths", "new_cases", "new_deaths")
+DERIVED_COLUMNS = ("tasa_letalidad", "casos_promedio_7d", "grupo_etario_pais")
+MYSQL_STRING_COLUMNS = {
+    "iso_code": "VARCHAR(16)",
+    "continent": "VARCHAR(100)",
+    "location": "VARCHAR(191)",
+    "grupo_etario_pais": "VARCHAR(50)",
+}
+MYSQL_OUTPUT_COLUMNS = (
+    *SELECTED_COLUMNS,
+    *DERIVED_COLUMNS,
 )
 MYSQL_TYPE_BY_SPARK_TYPE = {
     BooleanType: "BOOLEAN",
@@ -164,18 +175,21 @@ def get_spark_session() -> SparkSession:
                     .config("spark.jars.packages", JDBC_PACKAGE)
                     .config("spark.jars.ivy", str(ivy_directory))
                     .config("spark.sql.session.timeZone", "UTC")
+                    .config(
+                        "spark.sql.shuffle.partitions",
+                        os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "8"),
+                    )
                 )
                 if master.startswith("local"):
-                    _spark = (
-                        _spark.config(
-                            "spark.driver.host",
-                            os.getenv("SPARK_DRIVER_HOST", "127.0.0.1"),
-                        )
-                        .config(
+                    driver_host = os.getenv("SPARK_DRIVER_HOST")
+                    driver_bind_address = os.getenv("SPARK_DRIVER_BIND_ADDRESS")
+                    if driver_host:
+                        _spark = _spark.config("spark.driver.host", driver_host)
+                    if driver_bind_address:
+                        _spark = _spark.config(
                             "spark.driver.bindAddress",
-                            os.getenv("SPARK_DRIVER_BIND_ADDRESS", "127.0.0.1"),
+                            driver_bind_address,
                         )
-                    )
                 _spark = _spark.getOrCreate()
                 _spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "ERROR"))
             except Exception as exc:
@@ -192,7 +206,7 @@ def _preview(frame: DataFrame, columns: tuple[str, ...]) -> list[dict[str, Any]]
 
 
 def extraer_dataset() -> dict[str, Any]:
-    """Download the RS-DELVE CSV, read it with Spark, and return source statistics."""
+    """Download the OWID CSV, read it with Spark, and return source statistics."""
     global _raw_df, _processed_df, _download_directory, _source_stats, _etl_metrics
     with _lock:
         spark = get_spark_session()
@@ -200,7 +214,7 @@ def extraer_dataset() -> dict[str, Any]:
         frame: DataFrame | None = None
         try:
             temporary_directory = Path(tempfile.mkdtemp(prefix="epidemiologia-"))
-            csv_path = temporary_directory / "rs-delve-covid19.csv"
+            csv_path = temporary_directory / "owid-covid-data.csv"
             with requests.get(DATASET_URL, stream=True, timeout=(15, 180)) as response:
                 response.raise_for_status()
                 with csv_path.open("wb") as csv_file:
@@ -217,13 +231,13 @@ def extraer_dataset() -> dict[str, Any]:
             frame.persist(StorageLevel.MEMORY_AND_DISK)
             row_count = frame.count()
             preview_columns = (
-                "ISO",
-                "country_name",
-                "DATE",
-                "cases_total",
-                "cases_new",
-                "deaths_total",
-                "stats_population",
+                "iso_code",
+                "location",
+                "date",
+                "total_cases",
+                "new_cases",
+                "total_deaths",
+                "population",
             )
             preview = _preview(frame, preview_columns)
         except Exception as exc:
@@ -231,9 +245,9 @@ def extraer_dataset() -> dict[str, Any]:
                 frame.unpersist()
             if temporary_directory is not None:
                 shutil.rmtree(temporary_directory, ignore_errors=True)
-            logger.exception("No se pudo extraer el dataset de RS-DELVE")
+            logger.exception("No se pudo extraer el dataset de OWID")
             raise SparkEngineError(
-                "No fue posible descargar o leer el CSV de RS-DELVE. Intenta nuevamente."
+                "No fue posible descargar o leer el CSV de OWID. Intenta nuevamente."
             ) from exc
 
         if _raw_df is not None:
@@ -257,7 +271,7 @@ def extraer_dataset() -> dict[str, Any]:
 
 
 def _normalize_source_schema(frame: DataFrame) -> DataFrame:
-    """Rename DELVE source columns to the canonical names used by the ETL."""
+    """Accept canonical OWID names and legacy DELVE aliases."""
     for canonical, source_column in SOURCE_COLUMN_ALIASES.items():
         if canonical not in frame.columns and source_column in frame.columns:
             frame = frame.withColumnRenamed(source_column, canonical)
@@ -273,19 +287,44 @@ def _add_missing_columns(frame: DataFrame) -> DataFrame:
     return frame.select(*SELECTED_COLUMNS)
 
 
+def _clean_text_column(column: str, lowercase: bool = False) -> Column:
+    """Normalize whitespace and remove punctuation noise from a text field."""
+    cleaned = F.trim(
+        F.regexp_replace(
+            F.regexp_replace(
+                F.col(column),
+                r"[^\p{L}\p{N}\s'’.-]",
+                " ",
+            ),
+            r"\s+",
+            " ",
+        )
+    )
+    if lowercase:
+        cleaned = F.lower(cleaned)
+    return F.when(F.length(cleaned) > 0, cleaned).otherwise(
+        F.lit(None).cast(StringType())
+    )
+
+
 def transformar_datos_pyspark() -> dict[str, Any]:
-    """Normalize RS-DELVE data, derive epidemiological KPIs, and report cleaning counts."""
+    """Clean OWID observations, derive KPIs, and report cleaning counts."""
     global _processed_df, _etl_metrics
     with _lock:
         if _raw_df is None:
             raise SparkEngineError("Primero descarga el dataset crudo.")
 
         processed: DataFrame | None = None
+        cached_intermediates: list[DataFrame] = []
         try:
             selected = _add_missing_columns(_normalize_source_schema(_raw_df))
             typed = selected.withColumn(
-                "location",
-                F.lower(F.regexp_replace(F.trim(F.col("location")), r"\s+", " ")),
+                "location", _clean_text_column("location", lowercase=True)
+            ).withColumn(
+                "continent", _clean_text_column("continent")
+            ).withColumn(
+                "iso_code",
+                F.upper(F.trim(F.col("iso_code"))),
             ).withColumn(
                 "date",
                 F.try_to_timestamp(
@@ -295,8 +334,19 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             )
 
             for column in NUMERIC_COLUMNS:
-                typed = typed.withColumn(column, F.col(column).cast(DoubleType()))
+                cast_value = F.col(column).cast(DoubleType())
+                invalid_number = F.isnan(cast_value) | (
+                    F.abs(cast_value) == F.lit(float("inf"))
+                )
+                typed = typed.withColumn(
+                    column,
+                    F.when(invalid_number, F.lit(None).cast(DoubleType())).otherwise(
+                        cast_value
+                    ),
+                )
 
+            typed = typed.persist(StorageLevel.MEMORY_AND_DISK)
+            cached_intermediates.append(typed)
             null_key_condition = (
                 F.col("iso_code").isNull()
                 | (F.length(F.trim(F.col("iso_code"))) == 0)
@@ -304,55 +354,88 @@ def transformar_datos_pyspark() -> dict[str, Any]:
                 | (F.length(F.trim(F.col("location"))) == 0)
                 | F.col("date").isNull()
             )
-            removed_null_keys = typed.filter(null_key_condition).count()
+            null_key_stats = typed.agg(
+                F.sum(F.when(null_key_condition, 1).otherwise(0)).alias("removed")
+            ).first()
+            removed_null_keys = int(null_key_stats["removed"] or 0)
             keyed = typed.filter(~null_key_condition)
 
-            aggregate_condition = F.col("iso_code").startswith("OWID")
-            removed_aggregates = keyed.filter(aggregate_condition).count()
+            aggregate_condition = F.col("iso_code").startswith("OWID_")
+            aggregate_stats = keyed.agg(
+                F.sum(F.when(aggregate_condition, 1).otherwise(0)).alias("removed"),
+                F.sum(F.when(~aggregate_condition, 1).otherwise(0)).alias("countries"),
+            ).first()
+            removed_aggregates = int(aggregate_stats["removed"] or 0)
             countries = keyed.filter(~aggregate_condition)
-            before_deduplication = countries.count()
+            before_deduplication = int(aggregate_stats["countries"] or 0)
             deduplicated = countries.dropDuplicates(["location", "date"])
-            after_deduplication = deduplicated.count()
-            removed_duplicates = before_deduplication - after_deduplication
-
-            imputation_counts = deduplicated.agg(
+            deduplicated = deduplicated.persist(StorageLevel.MEMORY_AND_DISK)
+            cached_intermediates.append(deduplicated)
+            deduplicated_stats = deduplicated.agg(
+                F.count("*").alias("rows"),
                 *(
                     F.sum(F.when(F.col(column).isNull(), 1).otherwise(0)).alias(column)
-                    for column in DAILY_METRICS
-                )
+                    for column in IMPUTED_COLUMNS
+                ),
             ).first()
+            after_deduplication = int(deduplicated_stats["rows"] or 0)
+            removed_duplicates = before_deduplication - after_deduplication
             imputed_daily_values = sum(
-                int(imputation_counts[column] or 0) for column in DAILY_METRICS
+                int(deduplicated_stats[column] or 0) for column in IMPUTED_COLUMNS
             )
-            filled = deduplicated.fillna(0, subset=list(DAILY_METRICS))
-            moving_average = Window.partitionBy("location").orderBy("date").rowsBetween(-6, 0)
+            filled = deduplicated.fillna(0, subset=list(IMPUTED_COLUMNS))
+            first_case = Window.partitionBy("location")
+            with_first_case = filled.withColumn(
+                "_first_case_date",
+                F.min(
+                    F.when(F.col("total_cases") > 0, F.col("date"))
+                ).over(first_case),
+            )
+            active_countries = with_first_case.filter(
+                F.col("_first_case_date").isNotNull()
+                & (F.col("date") >= F.col("_first_case_date"))
+            ).drop("_first_case_date")
+            moving_average = (
+                Window.partitionBy("location")
+                .orderBy(F.col("date").cast("timestamp").cast("long"))
+                .rangeBetween(-6 * 24 * 60 * 60, 0)
+            )
 
             processed = (
-                filled.withColumn(
-                    "letalidad_pct",
+                active_countries.withColumn(
+                    "tasa_letalidad",
                     F.when(
-                        F.col("total_cases").isNotNull() & (F.col("total_cases") > 0),
+                        F.col("total_cases") > 0,
                         (F.col("total_deaths") / F.col("total_cases")) * F.lit(100.0),
                     ).otherwise(F.lit(0.0)),
                 )
                 .withColumn(
-                    "promedio_movil_7d",
+                    "casos_promedio_7d",
                     F.avg("new_cases").over(moving_average),
                 )
                 .withColumn(
                     "grupo_etario_pais",
-                    F.when(F.col("median_age") < 25, "Joven")
-                    .when(F.col("median_age") < 38, "Intermedia")
-                    .when(F.col("median_age") >= 38, "Envejecida")
-                    .otherwise("No disponible"),
+                    F.when(F.col("aged_65_older").isNull(), "No disponible")
+                    .when(F.col("aged_65_older") >= 15, "Población Envejecida")
+                    .when(F.col("aged_65_older") >= 8, "Población Intermedia")
+                    .otherwise("Población Joven"),
                 )
                 .persist(StorageLevel.MEMORY_AND_DISK)
             )
             row_count = processed.count()
+            removed_pre_first_case = after_deduplication - row_count
             preview = _preview(processed, PREVIEW_COLUMNS)
+            for frame in cached_intermediates:
+                frame.unpersist()
         except SparkEngineError:
+            for frame in cached_intermediates:
+                frame.unpersist()
+            if processed is not None:
+                processed.unpersist()
             raise
         except Exception as exc:
+            for frame in cached_intermediates:
+                frame.unpersist()
             if processed is not None:
                 processed.unpersist()
             logger.exception("Falló la transformación de datos con PySpark")
@@ -367,6 +450,7 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             "removed_null_keys": removed_null_keys,
             "removed_aggregates": removed_aggregates,
             "removed_duplicates": removed_duplicates,
+            "removed_pre_first_case": removed_pre_first_case,
             "imputed_daily_values": int(imputed_daily_values),
         }
         return {
@@ -422,6 +506,68 @@ def _mysql_staging_table_ddl(frame: DataFrame, table_name: str) -> str:
     )
 
 
+def _mysql_empty_table_ddl(table_name: str) -> str:
+    """Create the optimized empty table schema expected by the OWID ETL."""
+    if not table_name.replace("_", "").isalnum():
+        raise SparkEngineError("El nombre de la tabla no es válido.")
+
+    column_definitions = []
+    for column_name in MYSQL_OUTPUT_COLUMNS:
+        if not column_name.replace("_", "").isalnum():
+            raise SparkEngineError("El esquema contiene un nombre de columna inválido.")
+        if column_name in MYSQL_STRING_COLUMNS:
+            mysql_type = MYSQL_STRING_COLUMNS[column_name]
+        elif column_name == "date":
+            mysql_type = "DATE"
+        else:
+            mysql_type = "DOUBLE"
+
+        not_null = " NOT NULL" if column_name in {"location", "date"} else ""
+        column_definitions.append(f"`{column_name}` {mysql_type}{not_null}")
+
+    column_definitions.extend(
+        (
+            "PRIMARY KEY (`location`, `date`)",
+            "KEY `idx_seguimiento_date` (`date`)",
+            "KEY `idx_seguimiento_iso_code` (`iso_code`)",
+        )
+    )
+    return (
+        f"CREATE TABLE `{table_name}` ({', '.join(column_definitions)}) "
+        "ENGINE=InnoDB"
+    )
+
+
+def recrear_tabla_aiven(db_config: DatabaseConfig) -> dict[str, Any]:
+    """Drop and recreate the empty epidemiological table in Aiven MySQL."""
+    if db_config.target != "cloud":
+        raise SparkEngineError("El reseteo solo está permitido para Aiven Cloud.")
+
+    engine = create_sqlalchemy_engine(db_config)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                f"DROP TABLE IF EXISTS `{TARGET_TABLE}`"
+            )
+            connection.exec_driver_sql(
+                _mysql_empty_table_ddl(TARGET_TABLE)
+            )
+    except Exception as exc:
+        logger.exception("No se pudo recrear la tabla epidemiológica en Aiven")
+        raise SparkEngineError(
+            "No fue posible recrear la tabla en Aiven. Verifica la conexión y los permisos."
+        ) from exc
+    finally:
+        engine.dispose()
+
+    return {
+        "table": TARGET_TABLE,
+        "database": db_config.database,
+        "target": db_config.target,
+        "rows": 0,
+    }
+
+
 def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
     """Atomically replace the MySQL table with a PK-constrained Spark load."""
     with _lock:
@@ -458,7 +604,8 @@ def cargar_a_mysql(db_config: DatabaseConfig) -> dict[str, Any]:
                     .option("user", db_config.username)
                     .option("password", db_config.password)
                     .option("driver", JDBC_DRIVER)
-                    .mode("append")
+                    .option("truncate", "true")
+                    .mode("overwrite")
                     .save()
                 )
 

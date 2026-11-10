@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=2">
+  <link rel="stylesheet" href="/static/css/style.css?v=3">
 </head>
 <body>
   <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -22,10 +22,10 @@
         </span>
         <span>RESPIRA<span class="brand-dot">.</span></span>
       </a>
-      <div class="topbar-meta"><span class="live-dot"></span> PIPELINE EPIDEMIOLÓGICO <span class="meta-divider">/</span> RS-DELVE · PySpark</div>
+      <div class="topbar-meta"><span class="live-dot"></span> PIPELINE EPIDEMIOLÓGICO <span class="meta-divider">/</span> OWID · PySpark</div>
       <div class="source-links">
-        <a class="source-link" href="https://github.com/rs-delve/covid19_datasets" target="_blank" rel="noreferrer">Repositorio RS-DELVE <span aria-hidden="true">↗</span></a>
-        <a class="source-link" href="https://raw.githubusercontent.com/rs-delve/covid19_datasets/master/dataset/combined_dataset_latest.csv" target="_blank" rel="noreferrer">CSV consolidado <span aria-hidden="true">↗</span></a>
+        <a class="source-link" href="https://github.com/owid/covid-19-data" target="_blank" rel="noreferrer">Repositorio OWID <span aria-hidden="true">↗</span></a>
+        <a class="source-link" href="https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/owid-covid-data.csv" target="_blank" rel="noreferrer">CSV consolidado <span aria-hidden="true">↗</span></a>
       </div>
     </header>
 
@@ -36,7 +36,7 @@
         <p class="hero-description">De millones de registros epidemiológicos a señales claras para entender la evolución de las enfermedades respiratorias.</p>
       </div>
       <div class="hero-stats" aria-label="Características del pipeline">
-        <div class="hero-stat"><span class="stat-icon cyan">↘</span><strong>RS-DELVE</strong><small>DATASET GLOBAL</small></div>
+        <div class="hero-stat"><span class="stat-icon cyan">↘</span><strong>OWID</strong><small>DATASET GLOBAL</small></div>
         <div class="hero-stat"><span class="stat-icon violet">✳</span><strong>PySpark</strong><small>MOTOR ETL</small></div>
         <div class="hero-stat"><span class="stat-icon green">◈</span><strong>MySQL</strong><small>PERSISTENCIA</small></div>
       </div>
@@ -46,12 +46,12 @@
       <aside class="pipeline-panel glass-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">PIPELINE</p><h2>Flujo de trabajo</h2></div>
-          <span class="step-count">03 <span>/ 03</span></span>
+          <span class="step-count">04 <span>/ 04</span></span>
         </div>
         <div class="steps" aria-label="Fases del procesamiento">
           <div class="step-item active" data-step="extract">
             <span class="step-marker">01</span><span class="step-connector"></span>
-            <div class="step-label"><strong>Extracción</strong><small>CSV · RS-DELVE</small></div>
+            <div class="step-label"><strong>Extracción</strong><small>CSV · OWID</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
           <div class="step-item" data-step="transform">
@@ -59,8 +59,13 @@
             <div class="step-label"><strong>Transformación</strong><small>Limpieza · KPIs · Spark</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
+          <div class="step-item" data-step="reset">
+            <span class="step-marker">03</span><span class="step-connector"></span>
+            <div class="step-label"><strong>Reseteo Aiven</strong><small>Recrear tabla destino</small></div>
+            <span class="step-state" aria-hidden="true">●</span>
+          </div>
           <div class="step-item" data-step="load">
-            <span class="step-marker">03</span>
+            <span class="step-marker">04</span>
             <div class="step-label"><strong>Persistencia</strong><small>MySQL · JDBC seguro</small></div>
             <span class="step-state" aria-hidden="true">●</span>
           </div>
@@ -72,14 +77,14 @@
             <button type="button" class="target-option selected" data-target="local" aria-pressed="true"><span class="target-icon">⌂</span> Local</button>
             <button type="button" class="target-option" data-target="cloud" aria-pressed="false"><span class="target-icon">☁</span> Nube Aiven</button>
           </div>
-          <p class="target-note" id="target-note">MySQL en localhost · SSL desactivado</p>
+          <p class="target-note" id="target-note">MySQL local · SSL desactivado</p>
         </div>
         <div class="pipeline-foot"><span class="secure-icon">⌑</span> Credenciales protegidas por variables de entorno</div>
       </aside>
 
       <section class="results-panel glass-panel" aria-live="polite">
         <div class="results-heading">
-          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h2 id="view-title">Tu flujo, en tres pasos.</h2></div>
+          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h2 id="view-title">Tu flujo, en cuatro pasos.</h2></div>
           <span class="status-pill" id="status-pill"><span class="status-dot"></span><span id="status-text">LISTO PARA INICIAR</span></span>
         </div>
         <p class="results-intro" id="view-description">Ejecuta cada fase para descubrir cómo los datos abiertos se convierten en información lista para analizar.</p>
@@ -95,8 +100,13 @@
             <span class="action-title">Ejecutar ETL <span aria-hidden="true">↗</span></span>
             <span class="action-detail">Limpiar, normalizar y calcular KPIs</span>
           </button>
+          <button type="button" class="action-card" id="reset-button" disabled>
+            <span class="action-number">03 / RESETEO AIVEN</span>
+            <span class="action-title">Recrear tabla <span aria-hidden="true">↻</span></span>
+            <span class="action-detail">Vaciar y preparar la tabla destino en la nube</span>
+          </button>
           <button type="button" class="action-card" id="load-button" disabled>
-            <span class="action-number">03 / PERSISTENCIA</span>
+            <span class="action-number">04 / PERSISTENCIA</span>
             <span class="action-title">Cargar a MySQL <span aria-hidden="true">↗</span></span>
             <span class="action-detail">Guardar el resultado en el destino elegido</span>
           </button>
@@ -130,6 +140,7 @@
       const buttons = {
         extract: document.getElementById("extract-button"),
         transform: document.getElementById("transform-button"),
+        reset: document.getElementById("reset-button"),
         load: document.getElementById("load-button")
       };
       const targetNote = document.getElementById("target-note");
@@ -140,6 +151,8 @@
       const emptyState = document.getElementById("empty-state");
       let selectedTarget = "local";
       let busy = false;
+      let transformComplete = false;
+      let cloudTableReset = false;
 
       const labels = {
         rows: "REGISTROS",
@@ -147,9 +160,17 @@
         removed_null_keys: "CLAVES NULAS",
         removed_aggregates: "AGREGADOS",
         removed_duplicates: "DUPLICADOS",
+        removed_pre_first_case: "FILAS ANTERIORES AL PRIMER CASO",
         imputed_daily_values: "NULOS IMPUTADOS"
       };
       const numberFormat = new Intl.NumberFormat("es-ES");
+
+      function updateActionAvailability() {
+        buttons.reset.disabled = busy || selectedTarget !== "cloud" || !transformComplete || cloudTableReset;
+        buttons.load.disabled = busy || !transformComplete || (selectedTarget === "cloud" && !cloudTableReset);
+        buttons.extract.disabled = busy || buttons.extract.dataset.locked === "true";
+        buttons.transform.disabled = busy || buttons.transform.dataset.locked === "true" || !buttons.extract.dataset.locked;
+      }
 
       document.querySelectorAll(".target-option").forEach((button) => {
         button.addEventListener("click", () => {
@@ -161,8 +182,9 @@
             option.setAttribute("aria-pressed", String(selected));
           });
           targetNote.textContent = selectedTarget === "local"
-            ? "MySQL en localhost · SSL desactivado"
-            : "Aiven Cloud · conexión SSL requerida";
+            ? "MySQL local · SSL desactivado"
+            : "Aiven Cloud · SSL requerido · requiere reset antes de cargar";
+          updateActionAvailability();
         });
       });
 
@@ -176,7 +198,7 @@
 
       function setBusy(isBusy, title = "", detail = "") {
         busy = isBusy;
-        Object.values(buttons).forEach((button) => { button.disabled = isBusy || button.dataset.locked === "true"; });
+        updateActionAvailability();
         loadingState.hidden = !isBusy;
         if (isBusy) {
           statusPill.classList.remove("failed");
@@ -236,7 +258,7 @@
       }
 
       function updatePipeline(step) {
-        const order = ["extract", "transform", "load"];
+        const order = ["extract", "transform", "reset", "load"];
         const activeIndex = order.indexOf(step);
         document.querySelectorAll(".step-item").forEach((item, index) => {
           item.classList.toggle("complete", index < activeIndex || step === "load");
@@ -244,10 +266,10 @@
         });
       }
 
-      async function request(url, payload) {
+      async function request(url, payload, headers = {}) {
         const response = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...headers },
           body: payload ? JSON.stringify(payload) : "{}"
         });
         let result;
@@ -266,13 +288,13 @@
         const config = {
           extract: {
             url: "/api/extract",
-            title: "Descargando dataset de RS-DELVE",
+            title: "Descargando dataset de OWID",
             detail: "Descarga y lectura del CSV con Apache Spark.",
             heading: "Datos crudos, listos para explorar.",
             description: "El archivo original ya está disponible. Ahora puedes revisar su escala antes de transformarlo.",
             metricKeys: ["rows", "columns"],
             previewTitle: "Muestra del dataset original",
-            badge: "RS-DELVE · CSV"
+            badge: "OWID · CSV"
           },
           transform: {
             url: "/api/transform",
@@ -280,9 +302,19 @@
             detail: "Normalizando ubicaciones, fechas y métricas epidemiológicas.",
             heading: "Datos limpios. Señales más claras.",
             description: "Los agregados se excluyeron, las claves se validaron y se calcularon KPIs epidemiológicos.",
-            metricKeys: ["rows", "columns", "removed_null_keys", "removed_aggregates", "removed_duplicates", "imputed_daily_values"],
+            metricKeys: ["rows", "columns", "removed_null_keys", "removed_aggregates", "removed_duplicates", "removed_pre_first_case", "imputed_daily_values"],
             previewTitle: "Muestra del dataset transformado",
             badge: "NORMALIZADO · SPARK"
+          },
+          reset: {
+            url: "/api/recrear-tabla",
+            title: "Recreando tabla en Aiven",
+            detail: "Se vaciará la tabla existente y se creará su estructura optimizada.",
+            heading: "Tabla limpia, lista para cargar.",
+            description: "La tabla de Aiven se recreó vacía con su clave primaria e índices.",
+            metricKeys: ["rows"],
+            previewTitle: "Destino preparado",
+            badge: "AIVEN · TABLA VACÍA"
           },
           load: {
             url: "/api/load",
@@ -295,6 +327,16 @@
             badge: selectedTarget === "local" ? "MYSQL · LOCAL" : "MYSQL · AIVEN"
           }
         }[step];
+        let resetToken;
+        if (step === "reset") {
+          if (!window.confirm("Esta acción elimina los datos actuales de seguimiento_epidemiologico en Aiven. ¿Deseas continuar?")) return;
+          resetToken = window.prompt("Ingresa el token TABLE_RESET_TOKEN configurado en Railway.");
+          if (resetToken === null) return;
+          if (!resetToken.trim()) {
+            showToast("El token de reseteo es obligatorio.", true);
+            return;
+          }
+        }
         setBusy(true, config.title, config.detail);
         emptyState.hidden = true;
         output.hidden = true;
@@ -303,7 +345,8 @@
 
         try {
           const payload = step === "load" ? { database: selectedTarget } : undefined;
-          const data = await request(config.url, payload);
+          const headers = step === "reset" ? { "X-Reset-Token": resetToken } : {};
+          const data = await request(config.url, payload, headers);
           renderMetrics(data, config.metricKeys);
           if (step === "load") {
             renderTable({
@@ -317,7 +360,9 @@
           buttons[step].dataset.locked = "true";
           updatePipeline(step);
           if (step === "extract") buttons.transform.disabled = false;
-          if (step === "transform") buttons.load.disabled = false;
+          if (step === "transform") transformComplete = true;
+          if (step === "reset") cloudTableReset = true;
+          updateActionAvailability();
           statusText.textContent = step === "load" ? "CARGA COMPLETADA" : "FASE COMPLETADA";
           showToast(step === "load" ? "Datos guardados en MySQL correctamente." : "Fase completada correctamente.");
         } catch (error) {
@@ -329,9 +374,7 @@
         } finally {
           setBusy(false);
           statusPill.classList.remove("working");
-          Object.entries(buttons).forEach(([name, button]) => {
-            button.disabled = button.dataset.locked === "true" || (name === "transform" && !buttons.extract.dataset.locked) || (name === "load" && !buttons.transform.dataset.locked);
-          });
+          updateActionAvailability();
         }
       }
 

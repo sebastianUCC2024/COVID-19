@@ -5,10 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
 from sqlalchemy import URL, Engine, create_engine
-
-load_dotenv()
 
 
 class DatabaseConfigurationError(ValueError):
@@ -32,21 +29,25 @@ def get_database_config(target: str) -> DatabaseConfig:
         raise DatabaseConfigurationError("El destino debe ser 'local' o 'cloud'.")
 
     prefix = "LOCAL_DB" if target == "local" else "AIVEN_DB"
-    defaults = (
-        {"HOST": "127.0.0.1", "PORT": "3306", "USER": "root", "PASSWORD": "", "NAME": "covid19"}
-        if target == "local"
-        else {"HOST": "", "PORT": "25060", "USER": "", "PASSWORD": "", "NAME": ""}
-    )
     values = {
-        key: os.getenv(f"{prefix}_{key}", default)
-        for key, default in defaults.items()
+        key: os.getenv(f"{prefix}_{key}")
+        for key in ("HOST", "PORT", "USER", "PASSWORD", "NAME")
     }
-
-    required = ("HOST", "USER", "NAME")
-    missing = [key for key in required if not values[key].strip()]
+    missing = [key for key, value in values.items() if value is None]
     if missing:
         names = ", ".join(f"{prefix}_{key}" for key in missing)
         raise DatabaseConfigurationError(f"Faltan variables de configuración: {names}.")
+
+    empty_required = [
+        key
+        for key in ("HOST", "USER", "NAME")
+        if not values[key].strip()
+    ]
+    if target == "cloud" and not values["PASSWORD"].strip():
+        empty_required.append("PASSWORD")
+    if empty_required:
+        names = ", ".join(f"{prefix}_{key}" for key in empty_required)
+        raise DatabaseConfigurationError(f"Las variables de configuración no pueden estar vacías: {names}.")
 
     try:
         port = int(values["PORT"])

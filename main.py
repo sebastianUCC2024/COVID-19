@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,12 +18,13 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from db_config import DatabaseConfigurationError, get_database_config
-from spark_engine import (
+from etl_pipeline import (
     SparkEngineError,
     close_spark_session,
     extraer_dataset,
     transformar_datos_pyspark,
     cargar_a_mysql,
+    recrear_tabla_aiven,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -40,9 +43,9 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Seguimiento Epidemiológico",
     description=(
-        "Pipeline ETL de datos epidemiológicos RS-DELVE con PySpark y MySQL. "
-        "Fuente CSV: https://raw.githubusercontent.com/rs-delve/covid19_datasets/"
-        "master/dataset/combined_dataset_latest.csv"
+        "Pipeline ETL de datos epidemiológicos OWID con PySpark y MySQL. "
+        "Fuente CSV: https://raw.githubusercontent.com/owid/covid-19-data/"
+        "master/public/data/owid-covid-data.csv"
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -116,7 +119,7 @@ async def health_check() -> dict[str, Any]:
 
 @app.post(
     "/api/extract",
-    description="Descarga el CSV consolidado RS-DELVE y lo lee con PySpark.",
+    description="Descarga el CSV consolidado OWID y lo lee con PySpark.",
 )
 async def extract_data() -> dict:
     try:
@@ -133,6 +136,35 @@ async def transform_data() -> dict:
     except SparkEngineError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "success", "data": result, "message": "ETL completado"}
+
+
+@app.post("/api/recrear-tabla")
+async def recreate_cloud_table(
+    x_reset_token: str | None = Header(default=None),
+) -> dict:
+    expected_token = os.getenv("TABLE_RESET_TOKEN", "")
+    if len(expected_token) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="El reseteo está deshabilitado: configura un TABLE_RESET_TOKEN de 32 caracteres o más.",
+        )
+    if not x_reset_token or not hmac.compare_digest(x_reset_token, expected_token):
+        raise HTTPException(status_code=403, detail="Token de reseteo inválido.")
+
+    try:
+        database = get_database_config("cloud")
+    except DatabaseConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        result = await run_in_threadpool(recrear_tabla_aiven, database)
+    except SparkEngineError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Tabla vacía recreada en Aiven Cloud",
+    }
 
 
 @app.post("/api/load")

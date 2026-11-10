@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from py4j.protocol import Py4JNetworkError
+from py4j.protocol import Py4JError
 from pyspark import SparkContext, StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
@@ -171,7 +171,7 @@ def _spark_gateway_is_alive() -> bool:
 
     try:
         _spark.sparkContext._jvm.java.lang.System.currentTimeMillis()
-    except (OSError, Py4JNetworkError):
+    except (OSError, Py4JError):
         logger.exception("El gateway JVM de Spark no responde")
         return False
     return True
@@ -193,6 +193,30 @@ def _discard_spark_state() -> None:
     SparkContext._active_spark_context = None
     SparkContext._gateway = None
     SparkContext._jvm = None
+
+
+def _release_cached_frames(
+    cached_frames: list[DataFrame],
+    processed: DataFrame | None,
+) -> bool:
+    """Release cached frames only while the Spark JVM is still reachable."""
+    if not _spark_gateway_is_alive():
+        _discard_spark_state()
+        return False
+
+    try:
+        for frame in cached_frames:
+            frame.unpersist()
+        if processed is not None:
+            processed.unpersist()
+    except (OSError, Py4JError):
+        logger.warning(
+            "La JVM dejó de responder mientras se liberaban los datos temporales",
+            exc_info=True,
+        )
+        _discard_spark_state()
+        return False
+    return True
 
 
 def get_spark_session() -> SparkSession:
@@ -283,8 +307,7 @@ def extraer_dataset() -> dict[str, Any]:
             )
             preview = _preview(frame, preview_columns)
         except Exception as exc:
-            if frame is not None:
-                frame.unpersist()
+            _release_cached_frames([frame] if frame is not None else [], None)
             if temporary_directory is not None:
                 shutil.rmtree(temporary_directory, ignore_errors=True)
             logger.exception("No se pudo extraer el dataset de OWID")
@@ -476,17 +499,20 @@ def transformar_datos_pyspark() -> dict[str, Any]:
             for frame in cached_intermediates:
                 frame.unpersist()
         except SparkEngineError:
-            for frame in cached_intermediates:
-                frame.unpersist()
-            if processed is not None:
-                processed.unpersist()
+            _release_cached_frames(cached_intermediates, processed)
             raise
         except Exception as exc:
-            for frame in cached_intermediates:
-                frame.unpersist()
-            if processed is not None:
-                processed.unpersist()
             logger.exception("Falló la transformación de datos con PySpark")
+            gateway_alive = _release_cached_frames(
+                cached_intermediates,
+                processed,
+            )
+            if not gateway_alive:
+                raise SparkEngineError(
+                    "La JVM de Spark terminó durante la transformación. "
+                    "El estado anterior fue descartado; vuelve a extraer el dataset "
+                    "y revisa los logs del servicio para identificar por qué terminó Java."
+                ) from exc
             raise SparkEngineError(
                 "Falló la transformación del dataset. Revisa los logs del servidor."
             ) from exc

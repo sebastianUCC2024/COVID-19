@@ -6,11 +6,21 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import uuid
 from pathlib import Path
 from typing import Any
+
+if sys.platform == "win32":
+    hadoop_dir = Path("C:/hadoop")
+    if hadoop_dir.exists():
+        os.environ.setdefault("HADOOP_HOME", str(hadoop_dir))
+        hadoop_bin = str(hadoop_dir / "bin")
+        current_path = os.environ.get("PATH", "")
+        if hadoop_bin not in current_path:
+            os.environ["PATH"] = f"{hadoop_bin};{current_path}"
 
 import requests
 from py4j.protocol import Py4JError, Py4JNetworkError

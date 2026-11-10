@@ -29,6 +29,9 @@ class DatabaseConfig:
 
 def get_database_config(target: str) -> DatabaseConfig:
     """Build a database configuration from LOCAL_DB_* or AIVEN_DB_* variables."""
+    # Recargar .env con override para asegurar valores frescos en caliente
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+
     if target not in {"local", "cloud"}:
         raise DatabaseConfigurationError("El destino debe ser 'local' o 'cloud'.")
 
@@ -37,6 +40,10 @@ def get_database_config(target: str) -> DatabaseConfig:
         key: os.getenv(f"{prefix}_{key}")
         for key in ("HOST", "PORT", "USER", "PASSWORD", "NAME")
     }
+
+    # Protección para AWS RDS: nunca usar el esquema interno 'mysql'
+    if target == "cloud" and values.get("NAME") == "mysql":
+        values["NAME"] = "covid19"
     missing = [key for key, value in values.items() if value is None]
     if missing:
         names = ", ".join(f"{prefix}_{key}" for key in missing)

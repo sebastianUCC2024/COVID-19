@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=3">
+  <link rel="stylesheet" href="/static/css/style.css?v=4">
 </head>
 <body>
   <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -42,7 +42,12 @@
       </div>
     </section>
 
-    <section class="workspace">
+    <nav class="section-nav" aria-label="Apartados de la aplicación">
+      <a class="section-link" href="#pipeline">Pipeline ETL</a>
+      <a class="section-link" href="#dashboard-epidemiologico">Dashboard Epidemiológico</a>
+    </nav>
+
+    <section class="workspace" id="pipeline" aria-label="Pipeline ETL">
       <aside class="pipeline-panel glass-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">PIPELINE</p><h2>Flujo de trabajo</h2></div>
@@ -120,6 +125,24 @@
           <small>Comienza descargando los datos abiertos de COVID-19.</small>
         </div>
       </section>
+    </section>
+
+    <section class="dashboard-panel glass-panel" id="dashboard-epidemiologico" aria-labelledby="dashboard-title">
+      <div class="panel-heading">
+        <div><p class="eyebrow">POWER BI · INFORME INTERACTIVO</p><h2 id="dashboard-title">Dashboard Epidemiológico</h2></div>
+      </div>
+      <p class="dashboard-description" id="dashboard-description">Explora las cuatro páginas del informe mediante los controles de Power BI y utiliza sus filtros para consultar los datos epidemiológicos.</p>
+      <div class="dashboard-frame">
+        <iframe
+          title="Seguimiento_Epidemiologico_Final"
+          src="https://app.powerbi.com/view?r=eyJrIjoiYTliOTlmYWYtY2NlMi00Y2M1LThmODctY2M1YzEyNjhlMTdiIiwidCI6IjhkMzY4MzZlLTZiNzUtNGRlNi1iYWI5LTVmNGIxNzc1NDI3ZiIsImMiOjR9"
+          width="600"
+          height="373.5"
+          loading="lazy"
+          aria-describedby="dashboard-description"
+          allowfullscreen>
+        </iframe>
+      </div>
     </section>
 
     <footer class="footer"><span>PROYECTO 06 <span class="footer-dot">•</span> SEGUIMIENTO EPIDEMIOLÓGICO</span><span>Datos abiertos para mejores decisiones <span class="footer-heart">✳</span></span></footer>

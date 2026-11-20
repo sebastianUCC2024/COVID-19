@@ -58,6 +58,16 @@ h1 span { color: var(--cyan); }
 .stat-icon { grid-row: span 2; font-size: 18px; }
 .stat-icon.cyan { color: var(--cyan); }.stat-icon.violet { color: var(--violet); }.stat-icon.green { color: var(--green); }
 
+.section-nav { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.section-link { padding: 11px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel); font-size: 12px; text-decoration: none; }
+.section-link:hover { border-color: var(--cyan); color: var(--cyan); }
+.section-link:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+#pipeline, #dashboard-epidemiologico { scroll-margin-top: 20px; }
+.dashboard-panel { min-width: 0; margin-top: 18px; padding: 25px 26px 22px; }
+.dashboard-description { margin: 12px 0 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.dashboard-frame { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--page); }
+.dashboard-frame iframe { display: block; width: 100%; height: clamp(480px, 72vw, 850px); border: 0; }
+
 .workspace { display: grid; grid-template-columns: 294px minmax(0, 1fr); gap: 18px; align-items: stretch; }
 .glass-panel { border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(145deg, rgba(20, 32, 48, .85), rgba(11, 19, 30, .88)); box-shadow: 0 16px 50px rgba(0, 0, 0, .13), inset 0 1px rgba(255,255,255,.025); backdrop-filter: blur(16px); }
 .pipeline-panel { display: flex; min-height: 486px; flex-direction: column; padding: 24px 21px 17px; }
@@ -162,6 +172,9 @@ tbody tr:hover { background: rgba(69,221,223,.035); }
 }
 
 @media (max-width: 600px) {
+  .section-link { flex: 1 1 100%; text-align: center; }
+  .dashboard-panel { padding: 19px 15px 16px; }
+  .dashboard-frame iframe { height: 70vh; min-height: 420px; max-height: 600px; }
   .shell { width: calc(100% - 30px); }
   .topbar { height: 68px; }
   .topbar-meta { display: none; }
